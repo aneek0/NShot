@@ -17,6 +17,7 @@ from types import SimpleNamespace
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.wps import connection as conn_mod  # noqa: E402
+from src.wps import bruteforce as bf_mod    # noqa: E402
 from src.wps import pixiewps                # noqa: E402
 import src.utils as utils_mod               # noqa: E402
 
@@ -214,9 +215,68 @@ def test_pixie_dust_collects_data_and_uses_pin():
         conn._cleanup()
 
 
+def test_bruteforce_quick_success():
+    """smartBruteforce с 7-значной маской: одна попытка -> M7 -> PIN найден."""
+    conn_mod.subprocess.Popen = FakeProcess
+    conn_mod.os.path.exists = lambda p: True
+    utils_mod.isInterfaceUp = lambda interface: True
+
+    tmpdir = tempfile.mkdtemp()
+    utils_mod.SESSIONS_DIR = tmpdir + os.sep
+
+    args = make_args()
+    bf = bf_mod.Initialize('wlan0', args)
+
+    tried_pins = []
+
+    def fake_single_connection(bssid, pin):
+        tried_pins.append(pin)
+        # M7 получено -> вторая половина PIN верна -> успех
+        bf.CONNECTION.CONNECTION_STATUS.LAST_M_MESSAGE = 7
+
+    bf.CONNECTION.singleConnection = fake_single_connection
+
+    try:
+        bf.smartBruteforce(BSSID, '1234567')
+        # Ожидаемый PIN: '1234' + '567' + контрольная сумма(1234567)=0
+        assert tried_pins == ['12345670'], tried_pins
+        # Сессия сохранена с текущей маской
+        sess = open(os.path.join(tmpdir, BSSID.replace(':', '') + '.run'), encoding='utf-8').read()
+        assert sess == '1234567', sess
+    finally:
+        bf.CONNECTION._cleanup()
+
+
+def test_bruteforce_abort_saves_session():
+    """Прерывание брутфорса сохраняет прогресс (маску) в сессию."""
+    conn_mod.subprocess.Popen = FakeProcess
+    conn_mod.os.path.exists = lambda p: True
+    utils_mod.isInterfaceUp = lambda interface: True
+
+    tmpdir = tempfile.mkdtemp()
+    utils_mod.SESSIONS_DIR = tmpdir + os.sep
+
+    args = make_args()
+    bf = bf_mod.Initialize('wlan0', args)
+
+    def fake_single_connection(bssid, pin):
+        raise KeyboardInterrupt  # пользователь прервал перебор
+
+    bf.CONNECTION.singleConnection = fake_single_connection
+
+    try:
+        bf.smartBruteforce(BSSID, '1234567')
+        sess = open(os.path.join(tmpdir, BSSID.replace(':', '') + '.run'), encoding='utf-8').read()
+        assert sess == '1234567', sess
+    finally:
+        bf.CONNECTION._cleanup()
+
+
 if __name__ == '__main__':
     test_pin_attack_success_writes_report()
     test_wrong_pin_returns_false()
     test_locked_retries_then_succeeds()
     test_pixie_dust_collects_data_and_uses_pin()
+    test_bruteforce_quick_success()
+    test_bruteforce_abort_saves_session()
     print('Интеграционные тесты атаки прошли ✅')

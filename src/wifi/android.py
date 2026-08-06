@@ -66,7 +66,36 @@ class AndroidNetwork:
             except subprocess.CalledProcessError:
                 logger.info('[-] Failed to disable always-on Wi-Fi scanning, skipping')
 
-        time.sleep(3)
+        # Адаптивное ожидание освобождения радио вместо фикс. time.sleep(3):
+        # возвращаемся, как только фреймворк подтвердил, что Wi-Fi выключен.
+        self._waitForRadioRelease()
+
+    def _isWifiDisabled(self) -> bool:
+        """True, когда Android-фреймворк сообщает, что Wi-Fi выключен."""
+        try:
+            out = subprocess.run(
+                ['cmd', 'wifi', 'status'],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                encoding='utf-8', errors='replace', timeout=2
+            )
+        except (OSError, FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            return False
+        return 'disabled' in (out.stdout or '').lower()
+
+    def _waitForRadioRelease(self, timeout: float = 3.0, poll: float = 0.2):
+        """Ждать освобождения радио максимум `timeout` секунд.
+
+        Заменяет старый фиксированный time.sleep(3): опрашиваем состояние
+        фреймворка и продолжаем, как только Wi-Fi выключен. Жёсткий потолок
+        тот же (3 с), поэтому хуже прежнего поведения не становится — обычно
+        заканчивается заметно раньше.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._isWifiDisabled():
+                return
+            time.sleep(poll)
+        logger.info(f'[-] Wi-Fi did not report disabled within {timeout:.0f}s, continuing anyway')
 
     def enableWifi(self, force_enable: bool = False, whisper: bool = False):
         """Enable Wi-Fi connectivity on Android."""

@@ -8,6 +8,7 @@
 
 import sys
 import os
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -22,6 +23,10 @@ class FakeOut:
 def _patch(captured, stdout='1'):
     def fake_run(cmd, *a, **k):
         captured.append(cmd)
+        # `cmd wifi status` в адаптивном ожидании пусть сразу говорит "disabled",
+        # чтобы юнит-тесты проходили без реального ожидания и быстро.
+        if cmd == ['cmd', 'wifi', 'status']:
+            return FakeOut('Wi-Fi is disabled')
         return FakeOut(stdout)
 
     android.subprocess.run = fake_run
@@ -96,9 +101,47 @@ def test_universal_wifi_scan():
     assert android.AndroidNetwork().universalWifiScan() is None
 
 
+def test_wait_for_radio_release_returns_early_when_disabled():
+    """Адаптивное ожидание мгновенно выходит, если Wi-Fi уже выключен."""
+    android.time.sleep = lambda s: None
+    status_calls = []
+
+    def fake_run(cmd, *a, **k):
+        if cmd == ['cmd', 'wifi', 'status']:
+            status_calls.append(cmd)
+            return FakeOut('Wi-Fi is disabled')
+        return FakeOut('')
+
+    android.subprocess.run = fake_run
+    net = android.AndroidNetwork()
+    net._waitForRadioRelease(timeout=1.0, poll=0.01)
+    # Сразу 'disabled' -> ни одного sleep, один опрос состояния
+    assert status_calls == [['cmd', 'wifi', 'status']], status_calls
+
+
+def test_wait_for_radio_release_falls_back_after_timeout():
+    """При зависшем фреймворке (не disabled) — фолбэк после таймаута, без ошибки."""
+    android.time.sleep = lambda s: None
+    android.subprocess.run = lambda *a, **k: FakeOut('Wi-Fi is enabled')
+
+    net = android.AndroidNetwork()
+    start = time.time()
+    net._waitForRadioRelease(timeout=0.05, poll=0.01)
+    elapsed = time.time() - start
+    assert elapsed < 1.0, f'ждал слишком долго: {elapsed:.2f}s'
+
+    # Wi-Fi стал disabled -> выходит быстро
+    android.subprocess.run = lambda *a, **k: FakeOut('Wi-Fi is disabled')
+    start = time.time()
+    net._waitForRadioRelease(timeout=1.0, poll=0.01)
+    assert time.time() - start < 0.2, 'должен выйти сразу при disabled'
+
+
 if __name__ == '__main__':
     test_store_always_scan_state()
     test_disable_and_enable_wifi()
     test_disable_wifi_keeps_always_scan_off_when_unset()
     test_universal_wifi_scan()
+    test_wait_for_radio_release_returns_early_when_disabled()
+    test_wait_for_radio_release_falls_back_after_timeout()
     print('Тесты android прошли ✅')

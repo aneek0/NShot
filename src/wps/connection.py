@@ -450,25 +450,47 @@ class Initialize:
             return self.CONNECTION_STATUS.STATUS == 'GOT_PSK'
 
     def _cleanup(self):
-        """Terminates connections and removes temporary files"""
+        """Terminates connections and removes temporary files (idempotent)."""
+
+        if getattr(self, '_CLEANED', False):
+            return
 
         try:
             self.RETSOCK.close()
             if hasattr(self, 'WPAS'):
-                self.WPAS.terminate()
-                if self.WPAS.stdout:
-                    self.WPAS.stdout.close()
-                self.WPAS.wait()
+                try:
+                    self.WPAS.terminate()
+                except (OSError, AttributeError):
+                    pass
+                if getattr(self.WPAS, 'stdout', None):
+                    try:
+                        self.WPAS.stdout.close()
+                    except OSError:
+                        pass
+                try:
+                    self.WPAS.wait()
+                except (OSError, AttributeError):
+                    pass
         except OSError:
             pass
 
-        if os.path.exists(self.RES_SOCKET_FILE):
-            os.remove(self.RES_SOCKET_FILE)
+        # Удаление временных файлов — каждый шаг защищён, чтобы __del__ не падал
+        for path in (getattr(self, 'RES_SOCKET_FILE', None), getattr(self, 'TEMPCONF', None)):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
-        shutil.rmtree(self.TEMPDIR, ignore_errors=True)
+        try:
+            shutil.rmtree(getattr(self, 'TEMPDIR', ''), ignore_errors=True)
+        except Exception:
+            pass
 
-        if os.path.exists(self.TEMPCONF):
-            os.remove(self.TEMPCONF)
+        self._CLEANED = True
 
     def __del__(self):
-        self._cleanup()
+        try:
+            self._cleanup()
+        except Exception:
+            pass

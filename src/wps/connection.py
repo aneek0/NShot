@@ -121,8 +121,10 @@ class Initialize:
                 except FileNotFoundError:
                     pin = generator.getLikely(bssid) or '12345670'
             elif not pbc_mode:
-                # If not pixiemode, ask user to select a pin from the list
-                pin = generator.promptPin(bssid) or '12345670'
+                # If not pixiemode, ask user to select a pin from the list.
+                # NULL PIN (00000000) fallback is automatic: tool tries it
+                # when no specific PIN is found or selected.
+                pin = generator.promptPin(bssid) or '00000000'
 
         if pbc_mode:
             self._wpsConnection(bssid, pbc_mode=pbc_mode)

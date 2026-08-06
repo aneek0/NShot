@@ -272,6 +272,41 @@ def test_bruteforce_abort_saves_session():
         bf.CONNECTION._cleanup()
 
 
+def test_null_pin_mode_uses_zero_pin():
+    """NULL PIN (-N): singleConnection с null_pin=True шлёт WPS_REG с PIN 00000000."""
+    lines = [
+        "WPS: Building Message M1",
+        "WPS: Received M1",
+        "wlan0: Trying to associate with 'TestNet' SSID: " + BSSID,
+        f"WPS: Network Key (hexdump)(32): {PSK_HEX}",
+    ]
+    conn, _ = _setup(lines, null_pin=True)
+    try:
+        result = conn.singleConnection(BSSID)  # без явного pin
+        assert result is True, 'NULL PIN путь должен завершиться успехом'
+        wps_regs = [c for c in conn.RETSOCK.sent if c.startswith('WPS_REG')]
+        assert wps_regs == [f'WPS_REG {BSSID} 00000000'], wps_regs
+    finally:
+        conn._cleanup()
+
+
+def test_pbc_mode_uses_wps_pbc():
+    """PBC: singleConnection(pbc_mode=True) отправляет WPS_PBC и ждёт Network Key."""
+    lines = [
+        "WPS: Starting PBC",
+        "WPS: Building Message M1",
+        f"WPS: Network Key (hexdump)(32): {PSK_HEX}",
+    ]
+    conn, _ = _setup(lines)
+    try:
+        result = conn.singleConnection(BSSID, pbc_mode=True)
+        assert result is True, 'PBC путь должен завершиться успехом'
+        assert any(c.startswith('WPS_PBC') for c in conn.RETSOCK.sent), conn.RETSOCK.sent
+        assert conn.CONNECTION_STATUS.WPA_PSK == PSK, conn.CONNECTION_STATUS.WPA_PSK
+    finally:
+        conn._cleanup()
+
+
 if __name__ == '__main__':
     test_pin_attack_success_writes_report()
     test_wrong_pin_returns_false()
@@ -279,4 +314,6 @@ if __name__ == '__main__':
     test_pixie_dust_collects_data_and_uses_pin()
     test_bruteforce_quick_success()
     test_bruteforce_abort_saves_session()
+    test_null_pin_mode_uses_zero_pin()
+    test_pbc_mode_uses_wps_pbc()
     print('Интеграционные тесты атаки прошли ✅')

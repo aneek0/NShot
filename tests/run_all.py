@@ -13,6 +13,7 @@ TESTS = [
     'test_generator.py',   # генератор PIN, контрольная сумма, MAC
     'test_scanner.py',     # парсер вывода iw scan
     'test_engine.py',      # движок атак: pixiewps, wpa_supplicant, брутфорс
+    'test_integration.py', # полный конвейер атаки (PIN, retry, Pixie Dust, отчёт)
 ]
 
 

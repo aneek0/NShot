@@ -63,9 +63,10 @@ sudo pacman -S python wpa_supplicant iw iproute2 pixiewps
 
 Or with a single script:
 
-```bash
+
 # Auto-install: installs dependencies, clones the repo into ./NShot
 # (and pulls updates when run from inside the repo)
+```bash
 curl -fsSL https://raw.githubusercontent.com/aneek0/NShot/master/install.sh | bash
 ```
 

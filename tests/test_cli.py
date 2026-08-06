@@ -8,6 +8,9 @@
 
 import sys
 import os
+import io
+from contextlib import redirect_stdout
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -88,7 +91,27 @@ def test_main_loop_continues_until_keyboard_interrupt():
     assert calls['restore'] == 0  # -r не передавали
 
 
+def test_run_check_warns_on_wired_interface():
+    """--check предупреждает, если выбранный интерфейс не Wi-Fi."""
+    nshot.interfaceExists = lambda iface: True
+    nshot.isWirelessInterface = lambda iface: False
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        nshot.runCheck(SimpleNamespace(interface='eno1'))
+    assert 'Внимание' in buf.getvalue()
+    assert 'wireless' in buf.getvalue()
+
+    # Wi-Fi-интерфейс — без предупреждения
+    nshot.isWirelessInterface = lambda iface: True
+    buf2 = io.StringIO()
+    with redirect_stdout(buf2):
+        nshot.runCheck(SimpleNamespace(interface='wlan0'))
+    assert 'Внимание' not in buf2.getvalue()
+
+
 if __name__ == '__main__':
+    test_run_check_warns_on_wired_interface()
     test_main_single_run_with_kill_restore_iface_down()
     test_main_loop_continues_until_keyboard_interrupt()
     print('Тесты оркестрации CLI прошли ✅')

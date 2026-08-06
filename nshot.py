@@ -57,7 +57,12 @@ def interfaceExists(interface: str) -> bool:
     return Path(f'/sys/class/net/{interface}').exists()
 
 
-def runCheck(args) -> None:
+def isWirelessInterface(interface: str) -> bool:
+    """Проверить, что интерфейс — Wi-Fi (есть /sys/class/net/<if>/wireless)."""
+    return Path(f'/sys/class/net/{interface}/wireless').exists()
+
+
+def runCheck(args) -> int:
     """Самотест: печатает состояние окружения и не выполняет атак."""
     src.utils.clearScreen()
     print(f'NShot v{VERSION} — проверка окружения\n' + '=' * 50)
@@ -97,6 +102,9 @@ def runCheck(args) -> None:
     if args.interface:
         if interfaceExists(args.interface):
             print(f'[IF] Интерфейс {args.interface}: найден ✅')
+            if not isWirelessInterface(args.interface):
+                print(f'[IF] Внимание: {args.interface} выглядит как проводной (нет /sys/class/net/{args.interface}/wireless). '
+                      'WPS-атаки требуют Wi-Fi-адаптера (обычно wlan0).')
         else:
             print(f'[IF] Интерфейс {args.interface}: НЕ найден ❌')
             ok = False
@@ -207,6 +215,10 @@ def main():
 
     if args.interface and not interfaceExists(args.interface):
         src.utils.die(f'Интерфейс \'{args.interface}\' не найден. Проверь имя (iw dev)')
+
+    if args.interface and not isWirelessInterface(args.interface):
+        logger.warning(f'{args.interface} не похож на Wi-Fi (нет /sys/class/net/{args.interface}/wireless). '
+                       'WPS-атаки требуют Wi-Fi-адаптера (обычно wlan0)')
 
     setupDirectories()
     logger.initializeLogging()

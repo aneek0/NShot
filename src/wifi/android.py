@@ -15,6 +15,7 @@ import subprocess
 import time
 
 from src import logger
+from src import utils as src_utils
 
 class AndroidNetwork:
     """Manages android Wi-Fi-related settings"""
@@ -87,3 +88,25 @@ class AndroidNetwork:
                 subprocess.run(wifi_enable_always_scanning_cmd)
             except subprocess.CalledProcessError:
                 logger.info('[-] Failed to enable always-on Wi-Fi scanning, skipping')
+
+    def universalWifiScan(self) -> str | None:
+        """Android fallback scan when `iw` is unavailable.
+
+        Uses the Android WiFi manager (`cmd wifi list-scan-results`) or falls back
+        to `dumpsys wifi` output. Returns raw text (iw-like), or None if not
+        on Android / the command fails.
+        """
+        if not src_utils.isAndroid():
+            return None
+
+        logger.info('Android: using universal WiFi scan (cmd wifi)…')
+        cmd = ('cmd wifi list-scan-results 2>/dev/null || '
+               'dumpsys wifi | grep -A 20 "Latest scan results"')
+        try:
+            proc = subprocess.run(cmd, shell=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                encoding='utf-8', errors='replace')
+            return proc.stdout if proc.stdout.strip() else None
+        except (subprocess.CalledProcessError, FileNotFoundError) as error:
+            logger.info(f'Android WiFi fetch failed: {error}')
+            return None

@@ -25,6 +25,8 @@
 - 🎯 Предсказание PIN по BSSID (алгоритмы 3WiFi, D-Link, ASUS, Broadcom и др.)
 - 📇 Статик-PIN для 52 моделей роутеров (TP-Link, Netgear, Belkin, D-Link и др.),
   MAC-специфичные PIN подставляются автоматически по OUI
+- 📶 Определение WiFi-стандарта (WiFi 6/5) в таблице сканера, Android fallback-скан
+  через `cmd wifi`/`dumpsys` когда `iw` недоступен
 - 🔘 WPS PBC и NULL PIN (`-N`)
 - 🧹 Авто-убийство мешающих процессов (`--kill`) и восстановление (`--restore`)
 - 📊 Сохранение результатов в `reports/stored.{txt,csv,json}`

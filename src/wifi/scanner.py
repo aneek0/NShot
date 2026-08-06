@@ -21,6 +21,7 @@ from src.utils import REPORTS_DIR
 
 import src.args
 import src.utils
+from src.wifi.android import AndroidNetwork
 
 class WiFiScanner:
     """Handles parsing scan results and table."""
@@ -211,7 +212,12 @@ class WiFiScanner:
         for line in lines:
             if line.startswith('command failed:'):
                 logger.error(f'Error: {line}')
-                return False
+                # Android fallback: iw может отсутствовать — пробуем cmd wifi / dumpsys
+                fallback = AndroidNetwork().universalWifiScan()
+                if not fallback:
+                    return False
+                lines = fallback.splitlines()
+                break
 
             line = line.strip('\t')
 

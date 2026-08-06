@@ -76,8 +76,29 @@ def test_disable_wifi_keeps_always_scan_off_when_unset():
     assert always_scan_cmds == [], always_scan_cmds
 
 
+def test_universal_wifi_scan():
+    """universalWifiScan: только на Android, возвращает вывод cmd wifi / None."""
+    # Не Android -> None, subprocess не вызывается
+    android.src_utils.isAndroid = lambda: False
+    captured = []
+    android.subprocess.run = lambda *a, **k: captured.append(a) or FakeOut()
+    assert android.AndroidNetwork().universalWifiScan() is None
+    assert captured == [], captured
+
+    # Android + непустой вывод -> возвращается текст
+    android.src_utils.isAndroid = lambda: True
+    android.subprocess.run = lambda *a, **k: FakeOut('BSS 00:11:22:33:44:55(on wlan0)')
+    result = android.AndroidNetwork().universalWifiScan()
+    assert result == 'BSS 00:11:22:33:44:55(on wlan0)', result
+
+    # Android + пустой вывод -> None
+    android.subprocess.run = lambda *a, **k: FakeOut('   ')
+    assert android.AndroidNetwork().universalWifiScan() is None
+
+
 if __name__ == '__main__':
     test_store_always_scan_state()
     test_disable_and_enable_wifi()
     test_disable_wifi_keeps_always_scan_off_when_unset()
+    test_universal_wifi_scan()
     print('Тесты android прошли ✅')

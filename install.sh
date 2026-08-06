@@ -36,7 +36,8 @@ if [ -n "$PREFIX" ] && [ "${PREFIX#/data/data/com.termux}" != "$PREFIX" ]; then
     echo "==> Termux detected"
     pkg update -y
     pkg upgrade -y
-    pkg install -y root-repo sudo python wpa-supplicant pixiewps iw openssl git
+    pkg i root-repo
+    pkg i -y sudo python wpa-supplicant pixiewps iw openssl git
     if [ "$IN_REPO" = false ]; then
         echo "==> Cloning NShot..."
         git clone "$REPO_URL" "$REPO_DIR"

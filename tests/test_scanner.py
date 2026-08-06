@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Юнит-тесты парсера вывода `iw scan` (src/wifi/scanner.py)."""
+"""Unit tests for the `iw scan` output parser (src/wifi/scanner.py)."""
 
 import sys
 import os
@@ -12,7 +12,7 @@ from src.wifi import scanner as scanner_mod  # noqa: E402
 
 TEST_ARGS = SimpleNamespace(clear=False, verbose=False, reverse_scan=False)
 
-# Пример вывода iw scan: сеть с WPS 1.0 и сеть без WPS (должна быть отфильтрована)
+# Example iw scan output: a network with WPS 1.0 and a network without WPS (must be filtered)
 SAMPLE = """BSS 00:11:22:33:44:55(on wlan0)
 \tSSID: TestNet
 \tsignal: -45.00 dBm
@@ -33,13 +33,13 @@ BSS AA:BB:CC:DD:EE:FF(on wlan0)
 
 
 class FakeResult:
-    """Поддельный результат subprocess.run."""
+    """Fake subprocess.run result."""
     def __init__(self, stdout):
         self.stdout = stdout
 
 
 def test_prompt_network_selects_target():
-    """Интерактивный выбор цели: ввод '1' -> (BSSID, network_info)."""
+    """Interactive target selection: input '1' -> (BSSID, network_info)."""
     import builtins
     scanner_mod.subprocess.run = lambda *a, **k: FakeResult(SAMPLE)
 
@@ -64,15 +64,15 @@ def test_prompt_network_selects_target():
 def test_iw_scanner_parses_wps_network():
     scanner_mod.subprocess.run = lambda *a, **k: FakeResult(SAMPLE)
     s = scanner_mod.WiFiScanner('wlan0', vuln_list=None, args=TEST_ARGS)
-    # Перехватываем вывод таблицы
+    # Capture the table output
     import io
     from contextlib import redirect_stdout
     buf = io.StringIO()
     with redirect_stdout(buf):
         nets = s._iwScanner()
 
-    assert nets, 'не найдено WPS-сетей'
-    assert len(nets) == 1, f'ожидалась 1 WPS-сеть, получено {len(nets)}'
+    assert nets, 'No WPS networks found'
+    assert len(nets) == 1, f'expected 1 WPS network, got {len(nets)}'
     n = nets[1]
     assert n['BSSID'] == '00:11:22:33:44:55', n['BSSID']
     assert n['ESSID'] == 'TestNet', n['ESSID']
@@ -85,7 +85,7 @@ def test_iw_scanner_parses_wps_network():
 
 
 def test_iw_scanner_parses_wifi_standard():
-    """Определение WiFi-стандарта по строкам iw scan (HE/VHT/802.11ax/ac)."""
+    """WiFi standard detection from iw scan lines (HE/VHT/802.11ax/ac)."""
     sample = SAMPLE.replace(
         "\tRSN:\t * Version: 1",
         "\tRSN:\t * Version: 1\n\t * HE IEs:\n\t * 802.11ax\n", 1
@@ -102,7 +102,7 @@ def test_iw_scanner_parses_wifi_standard():
 
 
 def test_scanner_clears_screen_before_each_scan():
-    """Перед каждым запуском сканера (инициальный и refresh по Enter) экран чистится."""
+    """The screen is cleared before every scanner run (initial and Enter refresh)."""
     import builtins
     import io
     from contextlib import redirect_stdout
@@ -112,7 +112,7 @@ def test_scanner_clears_screen_before_each_scan():
     scanner_mod.src.utils.clearScreen = lambda: clears.append(1)
 
     real_input = builtins.input
-    inputs = iter(['', '1'])  # Enter -> refresh, затем выбор цели
+    inputs = iter(['', '1'])  # Enter -> refresh, then pick a target
     builtins.input = lambda prompt='': next(inputs)
     try:
         s = scanner_mod.WiFiScanner('wlan0', vuln_list=None, args=TEST_ARGS)
@@ -123,8 +123,8 @@ def test_scanner_clears_screen_before_each_scan():
         builtins.input = real_input
 
     assert result is not None
-    # Начальный скан + refresh по Enter = минимум 2 очистки экрана
-    assert len(clears) >= 2, f'ожидалось минимум 2 очистки, было: {clears}'
+    # Initial scan + Enter refresh = at least 2 screen clears
+    assert len(clears) >= 2, f'expected at least 2 clears, got: {clears}'
 
 
 if __name__ == '__main__':
@@ -132,4 +132,4 @@ if __name__ == '__main__':
     test_iw_scanner_parses_wps_network()
     test_iw_scanner_parses_wifi_standard()
     test_scanner_clears_screen_before_each_scan()
-    print('Тесты сканера прошли ✅')
+    print('Scanner tests passed ✅')

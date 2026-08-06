@@ -14,14 +14,21 @@ import src.args
 import src.utils
 from src.wifi.android import AndroidNetwork
 
+LOGO = '''  ███╗   ██╗███████╗██╗  ██╗ ██████╗ ████████╗
+  ████╗  ██║██╔════╝██║  ██║██╔═══██╗╚══██╔══╝
+  ██╔██╗ ██║███████╗███████║██║   ██║   ██║
+  ██║╚██╗██║╚════██║██╔══██║██║   ██║   ██║
+  ██║ ╚████║███████║██║  ██║╚██████╔╝   ██║
+  ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝    ╚═╝'''
+
 class WiFiScanner:
     """Handles parsing scan results and table."""
 
     def __init__(self, interface: str, vuln_list: str = None, args=None):
         self.INTERFACE = interface
         self.VULN_LIST = vuln_list
-        # Позволяет передать уже распарсенные аргументы из main() вместо
-        # повторного парсинга CLI при каждом импорте модуля.
+        # Lets main() pass already-parsed arguments instead of
+        # re-parsing the CLI on every module import.
         self.ARGS = args if args is not None else src.args.parseArgs()
 
         reports_fname = REPORTS_DIR + 'stored.csv'
@@ -77,9 +84,11 @@ class WiFiScanner:
     def _iwScanner(self) -> dict[int, dict] | bool:
         """Parsing iw scan results."""
 
-        # Перед каждым запуском сканера очищаем экран, чтобы предыдущие
-        # таблицы не накапливались (и начальный запуск, и refresh по Enter).
+        # Before each scanner run we clear the screen so previous tables do
+        # not accumulate (both the initial run and the Enter refresh), and
+        # print the logo before the table.
         src.utils.clearScreen()
+        print(LOGO)
 
         def handleNetwork(_line, result, networks):
             networks.append(
@@ -188,6 +197,10 @@ class WiFiScanner:
             re.compile(r' [*] Device name: (.*)'): handleDeviceName
         }
 
+        # Wait until the interface is really up: otherwise iw/wpa_supplicant
+        # fail with "Network is down (-100)" (the radio comes up async).
+        src.utils.waitForInterfaceUp(self.INTERFACE)
+
         command = ['iw', 'dev', f'{self.INTERFACE}', 'scan']
         try:
             iw_scan_process = subprocess.run(command,
@@ -205,7 +218,7 @@ class WiFiScanner:
         for line in lines:
             if line.startswith('command failed:'):
                 logger.error(f'Error: {line}')
-                # Android fallback: iw может отсутствовать — пробуем cmd wifi / dumpsys
+                # Android fallback: iw may be missing - try cmd wifi / dumpsys
                 fallback = AndroidNetwork().universalWifiScan()
                 if not fallback:
                     return False

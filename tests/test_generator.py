@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Юнит-тесты для генератора PIN (src/wps/generator.py)."""
+"""Unit tests for the PIN generator (src/wps/generator.py)."""
 
 import sys
 import os
@@ -11,65 +11,65 @@ from src.wps.generator import WPSpin, NetworkAddress  # noqa: E402
 
 
 def test_checksum():
-    """Контрольная сумма WPS (стандартный алгоритм)."""
-    # Эталонные значения, вычисленные вручную по алгоритму из OneShot
-    assert WPSpin.checksum(1234567) == 0, 'checksum(1234567) должен быть 0'
-    assert WPSpin.checksum(8765432) == 5, 'checksum(8765432) должен быть 5'
-    assert WPSpin.checksum(0) == 0, 'checksum(0) должен быть 0'
+    """WPS checksum (standard algorithm)."""
+    # Reference values, computed by hand following the OneShot algorithm
+    assert WPSpin.checksum(1234567) == 0, 'checksum(1234567) should be 0'
+    assert WPSpin.checksum(8765432) == 5, 'checksum(8765432) should be 5'
+    assert WPSpin.checksum(0) == 0, 'checksum(0) should be 0'
 
 
 def test_network_address():
-    """Разбор MAC-адресов в разных форматах."""
+    """Parse MAC addresses in different formats."""
     for mac in ['00:90:4C:C1:AC:21', '00-90-4C-C1-AC-21', '0090.4cc1.ac21', '00904CC1AC21']:
         na = NetworkAddress(mac)
-        assert na._STR_REPR == '00:90:4C:C1:AC:21', f'Неверный разбор {mac}: {na._STR_REPR}'
+        assert na._STR_REPR == '00:90:4C:C1:AC:21', f'Bad parse of {mac}: {na._STR_REPR}'
 
 
 def test_get_likely():
-    """Генерация вероятного PIN по BSSID (OUI 04BF6D есть в списке pin24)."""
+    """Generate a likely PIN from a BSSID (OUI 04BF6D is in the pin24 list)."""
     pin = WPSpin().getLikely('04:BF:6D:12:34:56')
-    assert pin is not None, 'getLikely не вернул PIN для BSSID с известным OUI'
-    assert len(str(pin)) == 8, f'PIN {pin} должен быть 8-значным'
+    assert pin is not None, 'getLikely did not return a PIN for a BSSID with a known OUI'
+    assert len(str(pin)) == 8, f'PIN {pin} should be 8 digits'
 
 
 def test_suggested_pins_valid():
-    """Все сгенерированные PIN должны быть валидными (8 цифр + контрольная сумма)."""
+    """All generated PINs must be valid (8 digits + checksum)."""
     gen = WPSpin()
     bssid = '04:BF:6D:12:34:56'
     for ident, algo in gen.ALGOS.items():
         try:
             pin = gen._generate(ident, bssid)
         except (ValueError, TypeError):
-            continue  # алгоритм неприменим к этому BSSID — пропускаем
+            continue  # algorithm not applicable to this BSSID - skip
         if pin is None:
             continue
         pin = str(pin)
-        # Пустые/статичные PIN не обязаны иметь корректную контрольную сумму
+        # Empty/static PINs do not have to carry a correct checksum
         if algo['mode'] in (gen.ALGO_STATIC, gen.ALGO_EMPTY):
             continue
-        assert len(pin) == 8, f'Алгоритм {ident}: PIN {pin} не 8-значный'
+        assert len(pin) == 8, f'Algorithm {ident}: PIN {pin} is not 8 digits'
         first7 = int(pin[:7])
         assert WPSpin.checksum(first7) == int(pin[7]), \
-            f'Алгоритм {ident}: контрольная сумма PIN {pin} неверна'
+            f'Algorithm {ident}: checksum of PIN {pin} is wrong'
 
 
 def test_farhan_static_pins():
-    """Статик-PIN из FARHAN-Shot-v2: доступны и валидны."""
+    """Static PINs from FARHAN-Shot-v2: available and valid."""
     gen = WPSpin()
-    # MAC-специфичный PIN должен предлагаться для своего BSSID
+    # A MAC-specific PIN must be suggested for its own BSSID
     pins = gen._getSuggested('90:F6:52:DE:23:1B')
     ids = [p['id'] for p in pins]
-    assert 'pinTDW8960N_90F652DE231B' in ids, 'MAC-специфичный PIN не предложен для своего BSSID'
+    assert 'pinTDW8960N_90F652DE231B' in ids, 'MAC-specific PIN not suggested for its own BSSID'
     pin = gen._generate('pinTDW8960N_90F652DE231B', '90:F6:52:DE:23:1B')
-    assert len(str(pin)) == 8 and str(pin).isdigit(), f'PIN {pin} невалиден'
-    # Чужой MAC не должен получать TD-специфичные подсказки
+    assert len(str(pin)) == 8 and str(pin).isdigit(), f'PIN {pin} is invalid'
+    # A foreign MAC must not get TD-specific suggestions
     ids_other = [p['id'] for p in gen._getSuggested('04:BF:6D:12:34:56')]
-    assert 'pinTDW8960N_90F652DE231B' not in ids_other, 'Чужой BSSID получил чужие PIN'
-    # Модельные статик-PIN доступны в общем списке
+    assert 'pinTDW8960N_90F652DE231B' not in ids_other, 'Foreign BSSID got foreign PINs'
+    # Model static PINs are available in the common list
     for ident in ['pinTLWR741N', 'pinNetgearDGN1000', 'pinSapidoRB1602', 'pinTalkTalk4E26D4']:
-        assert ident in gen.ALGOS, f'Отсутствует алгоритм {ident}'
+        assert ident in gen.ALGOS, f'Missing algorithm {ident}'
         p = gen._generate(ident, '90:F6:52:DE:23:1B')
-        assert len(str(p)) == 8 and str(p).isdigit(), f'PIN {p} для {ident} невалиден'
+        assert len(str(p)) == 8 and str(p).isdigit(), f'PIN {p} for {ident} is invalid'
 
 
 if __name__ == '__main__':
@@ -78,4 +78,4 @@ if __name__ == '__main__':
     test_get_likely()
     test_suggested_pins_valid()
     test_farhan_static_pins()
-    print('Все тесты генератора PIN прошли ✅')
+    print('PIN generator tests passed ✅')

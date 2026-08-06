@@ -54,7 +54,7 @@ class WiFiCollector:
 
             csv_writer.writerow([date_str, bssid, essid, wps_pin, wpa_psk])
 
-        # JSON — удобно для дальнейшей автоматизации и парсинга
+        # JSON - convenient for later automation and parsing
         record = {
             'date': date_str,
             'bssid': bssid,

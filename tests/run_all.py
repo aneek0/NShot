@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Запускает все юнит-тесты NShot."""
+"""Runs all NShot unit tests."""
 
 import os
 import subprocess
@@ -10,14 +10,14 @@ BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 TESTS = [
-    'test_generator.py',   # генератор PIN, контрольная сумма, MAC
-    'test_scanner.py',     # парсер вывода iw scan + выбор цели
-    'test_engine.py',      # движок атак: pixiewps, wpa_supplicant, брутфорс
-    'test_utils.py',       # utils: /proc, ip link, список уязвимых
-    'test_android.py',     # android: команды cmd wifi / settings
-    'test_fullflow.py',    # сквозной: скан -> выбор цели -> WPS -> отчёт
-    'test_integration.py', # полный конвейер атаки (PIN, retry, Pixie Dust, отчёт)
-    'test_cli.py',         # оркестрация CLI: kill/restore, iface up/down, loop
+    'test_generator.py',   # PIN generator, checksum, MAC
+    'test_scanner.py',     # iw scan output parser + target selection
+    'test_engine.py',      # attack engine: pixiewps, wpa_supplicant, brute-force
+    'test_utils.py',       # utils: /proc, ip link, vulnerable list
+    'test_android.py',     # android: cmd wifi / settings commands
+    'test_fullflow.py',    # end-to-end: scan -> target pick -> WPS -> report
+    'test_integration.py', # full attack pipeline (PIN, retry, Pixie Dust, report)
+    'test_cli.py',         # CLI orchestration: kill/restore, iface up/down, loop
 ]
 
 
@@ -33,10 +33,10 @@ def main():
             failed.append(test)
 
     if failed:
-        print(f'\nПровалены: {", ".join(failed)}')
+        print(f'\nFailed: {", ".join(failed)}')
         return 1
 
-    print('\nВсе тесты пройдены ✅')
+    print('\nAll tests passed ✅')
     return 0
 
 

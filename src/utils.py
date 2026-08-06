@@ -266,10 +266,37 @@ def isAndroid():
     return bool(hasattr(sys, 'getandroidapilevel'))
 
 def clearScreen():
-    """Clear the terminal screen."""
+    """Clear the terminal screen, including scrollback history if supported.
 
-    sys.stdout.write('\033[H\033[2J')
-    sys.stdout.flush()
+    Using the plain `clear` command (rather than only ANSI codes) actually
+    clears the scrollback, so the user can no longer scroll up into the
+    previous terminal output.
+    """
+    try:
+        subprocess.run(['clear'], check=True)
+    except (OSError, FileNotFoundError, subprocess.CalledProcessError):
+        # Fallback: ANSI escape sequence (clears visible screen only).
+        sys.stdout.write('\033[H\033[2J')
+        sys.stdout.flush()
+
+def waitForInterfaceUp(interface: str, timeout: float = 20.0, poll: float = 0.2) -> bool:
+    """Wait until the interface reports UP, so wpa_supplicant can come up.
+
+    On some platforms the interface/radio is enabled asynchronously; running
+    the scan or wpa_supplicant too early produces "Network is down (-100)".
+    If the interface state cannot be determined (no sysfs, no `ip`, or the
+    check fails), this behaves as a no-op and returns immediately.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if isInterfaceUp(interface):
+                return True
+        except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
+            # Cannot determine the state - do not block.
+            return True
+        time.sleep(poll)
+    return isInterfaceUp(interface)
 
 def die(text: str):
     """Print an error and exit with non-zero exit code."""

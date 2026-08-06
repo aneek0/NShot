@@ -17,161 +17,161 @@ def parseArgs():
   ██║ ╚████║███████║██║  ██║╚██████╔╝   ██║
   ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝    ╚═╝
 
-NShot v1.0 - тестирование защиты WPS: Pixie Dust, онлайн-брутфорс,
-предсказание PIN и PBC. Только для своих или авторизованных сетей.
-Основан на OneShot (kimocoder/rofl0r) и OneShot-Extended (chkndrp).
+NShot v1.0 - WPS security testing: Pixie Dust, online brute-force,
+PIN prediction and PBC. Only for your own or authorized networks.
+Based on OneShot (kimocoder/rofl0r) and OneShot-Extended (chkndrp).
 ''',
         formatter_class=argparse.RawTextHelpFormatter,
         add_help=False
     )
 
-    target_group = parser.add_argument_group('Основные аргументы')
+    target_group = parser.add_argument_group('Main arguments')
     target_group.add_argument(
         '-i', '--interface',
         type=str,
-        help='Имя интерфейса (например wlan0)'
+        help='Name of the interface (e.g. wlan0)'
     )
     target_group.add_argument(
         '-b', '--bssid',
         type=str,
-        help='BSSID целевой точки доступа'
+        help='BSSID of the target access point'
     )
     target_group.add_argument(
         '--check',
         action='store_true',
-        help='Проверить готовность окружения (зависимости, права, интерфейс) и выйти'
+        help='Check the environment (dependencies, privileges, interface) and exit'
     )
 
-    attack_group = parser.add_argument_group('Режимы атаки')
-    # -p/--pin вынесен из mutually exclusive группы: он комбинируется с -B
-    # (стартовая маска брутфорса) и с другими режимами как явный PIN.
+    attack_group = parser.add_argument_group('Attack modes')
+    # -p/--pin is outside the mutually exclusive group: it combines with -B
+    # (the brute-force start mask) and with other modes as an explicit PIN.
     attack_group.add_argument(
         '-p', '--pin',
         type=str,
-        help='Использовать указанный PIN (произвольная строка или 4/8-значный PIN);\n'
-             'в паре с -B/--bruteforce задаёт стартовую маску брутфорса'
+        help='Use the given PIN (arbitrary string or a 4/8-digit PIN);\n'
+             'together with -B/--bruteforce it sets the brute-force start mask'
     )
     attack_pin_group = attack_group.add_mutually_exclusive_group()
     attack_pin_group.add_argument(
         '-N', '--null-pin',
         action='store_true',
-        help='Использовать нулевой PIN'
+        help='Use the null PIN'
     )
     attack_pin_group.add_argument(
         '-P', '--pixie-dust',
         action='store_true',
-        help='Запустить атаку Pixie Dust (офлайн)'
+        help='Run the Pixie Dust attack (offline)'
     )
     attack_pin_group.add_argument(
         '-B', '--bruteforce',
         action='store_true',
-        help='Запустить онлайн-брутфорс PIN'
+        help='Run online PIN brute-force'
     )
     attack_pin_group.add_argument(
         '--pbc', '--push-button-connect',
         action='store_true',
-        help='Подключение по WPS PBC (кнопка)'
+        help='Connect via WPS PBC (push button)'
     )
 
-    opt_group = parser.add_argument_group('Дополнительные аргументы')
+    opt_group = parser.add_argument_group('Additional arguments')
     opt_group.add_argument(
         '-k', '--kill',
         action='store_true',
-        help='Автоматически убить процессы, мешающие работе с интерфейсом'
+        help='Automatically kill processes that interfere with the interface'
     )
     opt_group.add_argument(
         '-r', '--restore',
         action='store_true',
-        help='Восстановить убитые процессы при выходе (вместе с --kill)'
+        help='Restore killed processes on exit (together with --kill)'
     )
     opt_group.add_argument(
         '-w', '--write',
         action='store_true',
-        help='Сохранять найденные пароли/PIN в файл при успехе'
+        help='Save found passwords/PINs to a file on success'
     )
     opt_group.add_argument(
         '-l', '--loop',
         action='store_true',
-        help='Работать в цикле'
+        help='Run in a loop'
     )
     opt_group.add_argument(
         '-c', '--clear',
         action='store_true',
-        help='Очищать экран при каждом сканировании'
+        help='Clear the screen on every scan'
     )
     opt_group.add_argument(
         '-d', '--delay',
         type=float,
         default=0,
-        help='Задержка между попытками PIN в секундах (по умолчанию: %(default)s)'
+        help='Delay between PIN attempts in seconds (default: %(default)s)'
     )
     opt_group.add_argument(
         '-t', '--timeout',
         type=float,
         default=60,
-        help='Таймаут ожидания после WPS-лока (по умолчанию: %(default)s)'
+        help='Timeout wait after a WPS lock (default: %(default)s)'
     )
 
-    adv_group = parser.add_argument_group('Продвинутые аргументы')
+    adv_group = parser.add_argument_group('Advanced arguments')
     adv_group.add_argument(
         '-F', '--pixie-force',
         action='store_true',
-        help='Запустить Pixiewps с опцией --force (брутфорс полного диапазона)'
+        help='Run Pixiewps with the --force option (full-range brute-force)'
     )
     adv_group.add_argument(
         '-S', '--show-pixie',
         action='store_true',
-        help='Показывать команду pixiewps и связанные данные'
+        help='Show the pixiewps command and related data'
     )
     adv_group.add_argument(
         '-I', '--iface-down',
         action='store_true',
-        help='Опустить сетевой интерфейс после завершения работы'
+        help='Bring the network interface down after finishing'
     )
     adv_group.add_argument(
         '-M', '--mtk-wifi',
         action='store_true',
-        help='Активировать драйвер MediaTek Wi-Fi при запуске и деактивировать при выходе'
+        help='Activate the MediaTek Wi-Fi driver on start and deactivate on exit'
     )
     adv_group.add_argument(
         '-D', '--dont-touch-settings',
         action='store_true',
-        help='Не трогать настройки Wi-Fi Android при запуске и выходе'
+        help='Do not touch Android Wi-Fi settings on start and exit'
     )
     adv_group.add_argument(
         '--reverse-scan',
         action='store_true',
-        help='Обратный порядок сетей в списке. Полезно на маленьких экранах'
+        help='Reverse the network list order. Useful on small screens'
     )
     adv_group.add_argument(
         '--vuln-list',
         type=str,
         default=os.path.join(os.path.dirname(__file__), '../vulnwsc.txt'),
-        help='Свой файл со списком уязвимых устройств'
+        help='Your own file with the list of vulnerable devices'
     )
     adv_group.add_argument(
         '-v', '--verbose',
         action='store_true',
-        help='Подробный вывод'
+        help='Verbose output'
     )
     adv_group.add_argument(
         '-h', '--help',
         action='help',
-        help='Показать эту справку и выйти'
+        help='Show this help and exit'
     )
 
     args = parser.parse_args()
 
     if not args.check and not args.interface:
-        parser.error('укажите интерфейс (-i wlan0) или используйте --check для проверки окружения')
+        parser.error('specify an interface (-i wlan0) or use --check to verify the environment')
 
     if (args.pixie_force or args.show_pixie) and not args.pixie_dust:
-        parser.error('аргументы -F/--pixie-force и -S/--show-pixie можно использовать только с -P/--pixie-dust')
+        parser.error('the -F/--pixie-force and -S/--show-pixie arguments can only be used with -P/--pixie-dust')
 
     if args.delay and not args.bruteforce:
-        parser.error('аргумент -d/--delay можно использовать только с -B/--bruteforce')
+        parser.error('the -d/--delay argument can only be used with -B/--bruteforce')
 
     if args.restore and not args.kill:
-        parser.error('аргумент -r/--restore можно использовать только с -k/--kill')
+        parser.error('the -r/--restore argument can only be used with -k/--kill')
 
     return args

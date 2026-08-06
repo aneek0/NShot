@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Тест оркестрации CLI: запускает настоящий main() с моками тяжёлых звеньев.
+"""CLI orchestration test: runs the real main() with mocked heavy parts.
 
-Проверяет порядок работы entry point: проверка прав/интерфейса, kill/restore
-процессов, поднятие интерфейса, вызов атаки, опускание интерфейса при -I.
+Verifies the entry-point order: root/interface checks, kill/restore
+of processes, bringing the interface up, calling the attack, and bringing
+the interface down with -I.
 """
 
 import sys
@@ -19,7 +20,7 @@ from src import utils as utils_mod  # noqa: E402
 
 
 def _patch_main_deps():
-    """Отключает всё, что требует root/железа, оставляя логику main()."""
+    """Disables everything that needs root/hardware, keeping main() logic."""
     nshot.checkRoot = lambda: True
     nshot.checkCoreRequirements = lambda: []
     nshot.interfaceExists = lambda interface: True
@@ -38,7 +39,7 @@ def _patch_main_deps():
 
     def fake_iface_ctl(interface, action):
         calls[f'iface_{action}s'].append(interface)
-        return False  # успех
+        return False  # success
 
     nshot.handleConnection = fake_handle_connection
     nshot.src.utils.killInterfering = fake_kill
@@ -51,25 +52,25 @@ def _patch_main_deps():
 
 
 def test_main_single_run_with_kill_restore_iface_down():
-    """Одиночный прогон: -k -r -I -> kill, одна атака, restore, iface down."""
+    """Single run: -k -r -I -> kill, one attack, restore, iface down."""
     calls = _patch_main_deps()
     sys.argv = ['nshot.py', '-i', 'wlan0', '-k', '-r', '-I']
 
     nshot.main()
 
-    assert calls['kill'] == 1, '--kill должен убить мешающие процессы'
-    assert calls['handle_connection'] == 1, 'атака должна выполниться один раз'
-    assert calls['restore'] == 1, '--restore должен восстановить процессы'
+    assert calls['kill'] == 1, '--kill must kill interfering processes'
+    assert calls['handle_connection'] == 1, 'attack must run once'
+    assert calls['restore'] == 1, '--restore must restore processes'
     assert calls['iface_ups'] == ['wlan0'], calls['iface_ups']
     assert calls['iface_downs'] == ['wlan0'], calls['iface_downs']
 
 
 def test_main_loop_continues_until_keyboard_interrupt():
-    """--loop: перезапускает атаку до Ctrl+C, затем чисто завершается."""
+    """--loop: restarts the attack until Ctrl+C, then exits cleanly."""
     import builtins
     calls = _patch_main_deps()
     calls['loop_runs'] = 0
-    # При Ctrl+C main() спрашивает «Выйти?» — отвечаем 'y'
+    # On Ctrl+C main() asks 'Exit?' - answer 'y'
     real_input = builtins.input
     builtins.input = lambda prompt='': 'y'
     try:
@@ -87,49 +88,49 @@ def test_main_loop_continues_until_keyboard_interrupt():
     finally:
         builtins.input = real_input
 
-    assert calls['handle_connection'] == 3, f'ожидалось 3 итерации, было {calls["handle_connection"]}'
-    assert calls['restore'] == 0  # -r не передавали
+    assert calls['handle_connection'] == 3, f'expected 3 iterations, got {calls["handle_connection"]}'
+    assert calls['restore'] == 0  # -r was not passed
 
 
 def test_run_check_warns_on_wired_interface():
-    """--check предупреждает, если выбранный интерфейс не Wi-Fi."""
+    """--check warns if the selected interface is not Wi-Fi."""
     nshot.interfaceExists = lambda iface: True
     nshot.isWirelessInterface = lambda iface: False
 
     buf = io.StringIO()
     with redirect_stdout(buf):
         nshot.runCheck(SimpleNamespace(interface='eno1'))
-    assert 'Внимание' in buf.getvalue()
+    assert 'Note' in buf.getvalue()
     assert 'wireless' in buf.getvalue()
 
-    # Wi-Fi-интерфейс — без предупреждения
+    # Wi-Fi interface - no warning
     nshot.isWirelessInterface = lambda iface: True
     buf2 = io.StringIO()
     with redirect_stdout(buf2):
         nshot.runCheck(SimpleNamespace(interface='wlan0'))
-    assert 'Внимание' not in buf2.getvalue()
+    assert 'Note' not in buf2.getvalue()
 
 
 def test_args_combine_bruteforce_with_pin():
-    """-B -p 1234 (брутфорс со стартовой маской) парсится вместе; конфликты - отклоняются."""
+    """-B -p 1234 (brute-force with a start mask) parse together; conflicts are rejected."""
     import src.args as args_mod
 
     def parse(argv):
-        args_mod.parseArgs = args_mod.parseArgs  # реальная функция
+        args_mod.parseArgs = args_mod.parseArgs  # real function
         sys.argv = argv
         try:
             return args_mod.parseArgs(), None
         except SystemExit:
             return None, 'exit'
 
-    # Комбинация из README: брутфорс + стартовая маска
+    # Combination from README: brute-force + start mask
     a, err = parse(['nshot.py', '-i', 'wlan0', '-b', 'AA:BB:CC:DD:EE:FF', '-B', '-p', '1234'])
-    assert err is None, f'-B -p 1234 должен парситься: {err}'
+    assert err is None, f'-B -p 1234 should parse: {err}'
     assert a.bruteforce is True and a.pin == '1234', (a.bruteforce, a.pin)
 
-    # Взаимоисключающие режимы по-прежнему отклоняются
+    # Mutually exclusive modes are still rejected
     _, err = parse(['nshot.py', '-i', 'wlan0', '-P', '-B'])
-    assert err == 'exit', 'Pixie Dust + брутфорс должны конфликтовать'
+    assert err == 'exit', 'Pixie Dust + brute-force must conflict'
 
 
 if __name__ == '__main__':
@@ -137,4 +138,4 @@ if __name__ == '__main__':
     test_main_single_run_with_kill_restore_iface_down()
     test_main_loop_continues_until_keyboard_interrupt()
     test_args_combine_bruteforce_with_pin()
-    print('Тесты оркестрации CLI прошли ✅')
+    print('CLI orchestration tests passed ✅')

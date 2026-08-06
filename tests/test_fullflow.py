@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Полный сквозной тест: настоящий handleConnection от скана до отчёта.
+"""Full end-to-end test: real handleConnection from scan to report.
 
-Единственное, что мокается — железо: `iw scan` (subprocess.run), запуск
-wpa_supplicant (Popen) и его stdout (M1 -> Network Key -> GOT_PSK), а также
-интерактивный ввод выбора цели. Весь остальной конвейер — настоящий:
-сканирование, парсинг, выбор сети, WPS-обмен, извлечение PSK, запись отчёта.
+The only thing mocked is the hardware: `iw scan` (subprocess.run), the
+wpa_supplicant launch (Popen) and its stdout (M1 -> Network Key -> GOT_PSK),
+and the interactive target-selection input. Everything else is real:
+scanning, parsing, network selection, WPS exchange, PSK extraction, report.
 """
 
 import sys
@@ -30,7 +30,7 @@ from tests._fakes import (                  # noqa: E402
 
 
 class SuccessProcess(FakeProcess):
-    """wpa_supplicant, который сразу выдаёт успешную WPS-последовательность."""
+    """wpa_supplicant that immediately outputs a successful WPS sequence."""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.stdout = FakeStream([
@@ -52,15 +52,15 @@ def _full_args(tmpdir):
 
 
 def test_full_flow_scan_to_report():
-    """Скан -> выбор цели -> WPS-атака -> GOT_PSK -> отчёт (без моков конвейера)."""
+    """Scan -> target pick -> WPS attack -> GOT_PSK -> report (pipeline not mocked)."""
     tmpdir = tempfile.mkdtemp()
     utils_mod.REPORTS_DIR = tmpdir + os.sep
 
-    # Список уязвимых моделей (прочитается handleConnection)
+    # Vulnerable models list (read by handleConnection)
     with open(os.path.join(tmpdir, 'vuln.txt'), 'w', encoding='utf-8') as f:
         f.write('TestRouter T1000\n')
 
-    # Мокаем только железо и ввод
+    # Mock only the hardware and the input
     conn_mod.subprocess.Popen = SuccessProcess
     conn_mod.os.path.exists = lambda p: True
     conn_mod.socket.socket = lambda *a, **k: FakeSocket()
@@ -68,7 +68,7 @@ def test_full_flow_scan_to_report():
     scanner_mod.subprocess.run = lambda *a, **k: FakeIwResult(IW_SAMPLE)
 
     real_input = builtins.input
-    builtins.input = lambda prompt='': '1'  # выбор первой (единственной WPS) сети
+    builtins.input = lambda prompt='': '1'  # pick the first (only WPS) network
     try:
         args = _full_args(tmpdir)
         buf = io.StringIO()
@@ -77,10 +77,10 @@ def test_full_flow_scan_to_report():
     finally:
         builtins.input = real_input
 
-    # BSSID выбран сканером и подставлен в args
+    # BSSID selected by the scanner and injected into args
     assert args.bssid == BSSID, args.bssid
 
-    # Отчёт записан конвейером целиком
+    # Report written by the full pipeline
     recs = json.load(open(os.path.join(tmpdir, 'stored.json'), encoding='utf-8'))
     assert recs[0]['bssid'] == BSSID, recs
     assert recs[0]['essid'] == 'TestNet', recs
@@ -93,4 +93,4 @@ def test_full_flow_scan_to_report():
 
 if __name__ == '__main__':
     test_full_flow_scan_to_report()
-    print('Сквозной тест полного конвейера прошёл ✅')
+    print('Full pipeline end-to-end test passed ✅')

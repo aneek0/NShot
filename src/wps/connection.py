@@ -48,8 +48,8 @@ class Initialize:
         self.CONNECTION_STATUS = ConnectionStatus()
         self.PIXIE_CREDS  = src.wps.pixiewps.Data()
 
-        # Переиспользуемые объекты: создаются один раз, а не на каждую попытку
-        # PIN (singleConnection вызывается в горячем цикле брутфорса).
+        # Reusable objects: created once, not on every PIN attempt
+        # (singleConnection is called in the hot brute-force loop).
         self.GENERATOR = src.wps.generator.WPSpin()
         self.COLLECTOR = src.wifi.collector.WiFiCollector()
 
@@ -500,7 +500,7 @@ class Initialize:
         except OSError:
             pass
 
-        # Удаление временных файлов — каждый шаг защищён, чтобы __del__ не падал
+        # Remove temp files - every step is guarded so __del__ never crashes
         for path in (getattr(self, 'RES_SOCKET_FILE', None), getattr(self, 'TEMPCONF', None)):
             if path and os.path.exists(path):
                 try:

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Общие подделки (fakes) для тестов NShot: wpa_supplicant, iw, pixiewps.
+"""Shared fakes for NShot tests: wpa_supplicant, iw, pixiewps.
 
-Переиспользуются интеграционными тестами, чтобы не дублировать код.
+Reused by integration tests so the code is not duplicated.
 """
 
 from types import SimpleNamespace
@@ -12,7 +12,7 @@ PIN = '12345670'
 PSK = 'secret1234'
 PSK_HEX = PSK.encode().hex()
 
-# Пример вывода `iw scan`: сеть с WPS 1.0 и сеть без WPS (отфильтровывается)
+# Example `iw scan` output: a WPS 1.0 network and one without WPS (filtered out)
 IW_SAMPLE = f"""BSS {BSSID}(on wlan0)
 \tSSID: TestNet
 \tsignal: -45.00 dBm
@@ -33,7 +33,7 @@ BSS AA:BB:CC:DD:EE:FF(on wlan0)
 
 
 class FakeSocket:
-    """Поддельный control-сокет wpa_supplicant."""
+    """Fake wpa_supplicant control socket."""
     def __init__(self):
         self.sent = []
         self.reply = b'OK'
@@ -52,7 +52,7 @@ class FakeSocket:
 
 
 class FakeStream:
-    """Поддельный stdout wpa_supplicant: выдаёт строки по очереди."""
+    """Fake wpa_supplicant stdout: yields lines in sequence."""
     def __init__(self, lines):
         self._lines = list(lines)
 
@@ -67,7 +67,7 @@ class FakeStream:
 
 
 class FakeProcess:
-    """Поддельный процесс wpa_supplicant."""
+    """Fake wpa_supplicant process."""
     def __init__(self, *args, **kwargs):
         self._args = args
         self.stdout = FakeStream([])
@@ -89,7 +89,7 @@ class FakeProcess:
 
 
 class FakeIwResult:
-    """Поддельный результат subprocess.run для `iw scan`."""
+    """Fake subprocess.run result for `iw scan`."""
     def __init__(self, stdout):
         self.stdout = stdout
 
@@ -105,7 +105,7 @@ def make_args(**overrides):
 
 
 def mock_wpa_supplicant_launch(conn_mod, utils_mod):
-    """Подменяет запуск wpa_supplicant и проверку интерфейса на машине без железа."""
+    """Replace wpa_supplicant launch and interface check on machines without hardware."""
     conn_mod.subprocess.Popen = FakeProcess
     conn_mod.os.path.exists = lambda p: True
     if hasattr(utils_mod, 'isInterfaceUp'):
@@ -113,5 +113,5 @@ def mock_wpa_supplicant_launch(conn_mod, utils_mod):
 
 
 def network_key_line():
-    """Строка wpa_supplicant, приводящая к GOT_PSK (Network Key hexdump)."""
+    """wpa_supplicant line that leads to GOT_PSK (Network Key hexdump)."""
     return f"WPS: Network Key (hexdump)(32): {PSK_HEX}"

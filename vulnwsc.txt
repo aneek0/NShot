@@ -1,5 +1,5 @@
-# Список уязвимых/предсказуемых WPS PIN по моделям роутеров.
-# Объединение баз OneShot (kimocoder) + FARHAN-Shot-v2 (после декомпиляции).
+# List of vulnerable/predictable WPS PINs by router model.
+# Merge of the OneShot (kimocoder) + FARHAN-Shot-v2 (after decompilation) bases.
 3G-6200nL
 4111N
 7800n

@@ -14,7 +14,7 @@ class NetworkAddress:
             self._INT_REPR = mac
             self._STR_REPR = self._int2mac(mac)
         elif isinstance(mac, str):
-            # Нормализация: убираем любые разделители, собираем 12 hex-символов
+            # Normalize: strip any separators, collect 12 hex chars
             cleaned = re.sub(r'[^0-9a-fA-F]', '', mac)
             if len(cleaned) != 12:
                 raise ValueError(f'Invalid MAC address: {mac}')

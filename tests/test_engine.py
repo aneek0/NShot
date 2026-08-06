@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Юнит-тесты движка атак (src/wps/connection.py, bruteforce.py, pixiewps.py).
+"""Unit tests for the attack engine (src/wps/connection.py, bruteforce.py, pixiewps.py).
 
-Не требует root и Wi-Fi-адаптера: запуск wpa_supplicant и pixiewps мокается.
+Does not require root or a Wi-Fi adapter: the wpa_supplicant and pixiewps
+launches are mocked.
 """
 
 import sys
@@ -23,13 +24,13 @@ TEST_ARGS = SimpleNamespace(
 
 
 class FakeProcess:
-    """Поддельный процесс wpa_supplicant."""
+    """Fake wpa_supplicant process."""
     def __init__(self, *args, **kwargs):
         self._args = args
         self.stdout = type('FakeStream', (), {'readline': lambda self: '', 'close': lambda self: None})()
 
     def poll(self):
-        return None  # процесс «жив»
+        return None  # process is "alive"
 
     def communicate(self, *a, **k):
         return ('fake output', None)
@@ -42,13 +43,13 @@ class FakeProcess:
 
 
 def _mock_wpas_launch():
-    """Подменяет запуск wpa_supplicant и существование control-сокета."""
+    """Replace the wpa_supplicant launch and the control-socket existence."""
     conn_mod.subprocess.Popen = FakeProcess
     conn_mod.os.path.exists = lambda p: True
 
 
 def test_pixiewps_command_build():
-    """Сборка команды pixiewps."""
+    """Build the pixiewps command."""
     data = pixiewps.Data()
     data.PKE = 'PKE'
     data.PKR = 'PKR'
@@ -68,7 +69,7 @@ def test_pixiewps_command_build():
 
 
 def test_pixiewps_run_parsing():
-    """Разбор вывода pixiewps."""
+    """Parse pixiewps output."""
     captured = []
 
     class FakeRun:
@@ -92,12 +93,12 @@ def test_pixiewps_run_parsing():
     data.BSSID = 'AA:BB:CC:DD:EE:FF'
 
     pin = data.runPixieWps(show_command=False)
-    assert pin == '12345670', f'Ожидался PIN 12345670, получен {pin!r}'
-    assert captured, 'команда pixiewps не выполнялась'
+    assert pin == '12345670', f'Expected PIN 12345670, got {pin!r}'
+    assert captured, 'pixiewps command was not run'
 
 
 def test_pixiewps_empty_pin():
-    """PIN '<empty>' превращается в пустой PIN."""
+    """PIN '<empty>' becomes an empty PIN."""
     def fake_run(cmd, **kwargs):
         return type('FakeRun', (), {'stdout': '[+] WPS pin: <empty>\n', 'returncode': 0})()
 
@@ -110,12 +111,12 @@ def test_pixiewps_empty_pin():
 
 
 def test_connection_initializes_with_injected_args():
-    """connection.Initialize принимает args и строит корректную команду wpa_supplicant."""
+    """connection.Initialize accepts args and builds the correct wpa_supplicant command."""
     _mock_wpas_launch()
     conn = conn_mod.Initialize('wlan0', TEST_ARGS)
     try:
         assert conn.INTERFACE == 'wlan0'
-        assert conn.ARGS is TEST_ARGS, 'args не были переданы в движок'
+        assert conn.ARGS is TEST_ARGS, 'args were not passed into the engine'
         cmd = conn.WPAS._args[0]
         assert cmd[0] == 'wpa_supplicant'
         assert '-iwlan0' in cmd, cmd
@@ -125,19 +126,19 @@ def test_connection_initializes_with_injected_args():
 
 
 def test_bruteforce_initializes_with_injected_args():
-    """bruteforce.Initialize создаёт connection с теми же args."""
+    """bruteforce.Initialize creates its connection with the same args."""
     _mock_wpas_launch()
     bf = bf_mod.Initialize('wlan0', TEST_ARGS)
     try:
         assert bf.ARGS is TEST_ARGS
-        assert bf.CONNECTION.ARGS is TEST_ARGS, 'args не проброшены в connection внутри bruteforce'
+        assert bf.CONNECTION.ARGS is TEST_ARGS, 'args were not passed into the connection inside bruteforce'
         assert bf.CONNECTION.INTERFACE == 'wlan0'
     finally:
         bf.CONNECTION._cleanup()
 
 
 def test_reusable_objects_created_once():
-    """WPSpin/WiFiCollector создаются один раз и переиспользуются между попытками."""
+    """WPSpin/WiFiCollector are created once and reused between attempts."""
     _mock_wpas_launch()
     conn = conn_mod.Initialize('wlan0', TEST_ARGS)
     try:
@@ -151,17 +152,17 @@ def test_reusable_objects_created_once():
         try:
             conn.singleConnection('AA:BB:CC:DD:EE:FF', '12345670')
         except Exception:
-            pass  # fake-поток не даёт полного успеха — проверяем только создание объектов
+            pass  # the fake stream does not produce full success - only check object creation
         finally:
             c.src.wps.generator.WPSpin = orig_gen
             c.src.wifi.collector.WiFiCollector = orig_col
-        assert calls == [], f'не должно создаваться новых генераторов/коллекторов, было {calls}'
+        assert calls == [], f'should not create new generators/collectors, got {calls}'
     finally:
         conn._cleanup()
 
 
 def test_drain_wpas_non_blocking_with_pipe():
-    """_drainWpas сбрасывает накопленный вывод через select, не блокируясь."""
+    """_drainWpas flushes backlog via select without blocking."""
     _mock_wpas_launch()
     conn = conn_mod.Initialize('wlan0', TEST_ARGS)
     try:
@@ -174,7 +175,7 @@ def test_drain_wpas_non_blocking_with_pipe():
                 start = time.monotonic()
                 conn._drainWpas()
                 elapsed = time.monotonic() - start
-                assert elapsed < 0.5, f'_drainWpas заблокировался на {elapsed:.2f}s'
+                assert elapsed < 0.5, f'_drainWpas blocked for {elapsed:.2f}s'
     finally:
         conn._cleanup()
 
@@ -187,4 +188,4 @@ if __name__ == '__main__':
     test_bruteforce_initializes_with_injected_args()
     test_reusable_objects_created_once()
     test_drain_wpas_non_blocking_with_pipe()
-    print('Все тесты движка атак прошли ✅')
+    print('Attack engine tests passed ✅')

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Автоустановка NShot (Debian/Ubuntu, Arch, Fedora, Termux).
-# - Запущен внутри репозитория (sudo ./install.sh): ставит зависимости и
-#   обновляет репозиторий (git pull).
-# - Запущен снаружи (curl ... | bash): ставит зависимости, клонирует NShot
-#   в ./NShot и показывает команды запуска.
-# Запускать от root: sudo ./install.sh
+# NShot auto-installer (Debian/Ubuntu, Arch, Fedora, Termux).
+# - Run inside the repo (sudo ./install.sh): installs dependencies and
+#   updates the repo (git pull).
+# - Run from outside (curl ... | bash): installs dependencies, clones NShot
+#   into ./NShot and shows the run commands.
+# Run as root: sudo ./install.sh
 
 set -e
 
@@ -18,76 +18,75 @@ LOGO='  ███╗   ██╗███████╗██╗  ██╗ █
   ██║ ╚████║███████║██║  ██║╚██████╔╝   ██║
   ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝    ╚═╝'
 
-# Находимся ли уже внутри репозитория NShot
+# Are we already inside the NShot repo?
 IN_REPO=false
 if [ -f "nshot.py" ] && [ -f "LICENSE" ]; then
     IN_REPO=true
 fi
 
-# Лого — только при первом запуске (снаружи репозитория)
+# Logo - only on the first run (outside the repo)
 if [ "$IN_REPO" = false ]; then
     echo "$LOGO"
 fi
 
-echo "==> NShot: установка зависимостей"
+echo "==> NShot: installing dependencies"
 
 # --- Termux ---
 if [ -n "$PREFIX" ] && [ "${PREFIX#/data/data/com.termux}" != "$PREFIX" ]; then
-    echo "==> Обнаружен Termux"
+    echo "==> Termux detected"
     pkg update -y
     pkg upgrade -y
     pkg install -y root-repo sudo python wpa-supplicant pixiewps iw openssl git
     if [ "$IN_REPO" = false ]; then
-        echo "==> Клонирование NShot..."
+        echo "==> Cloning NShot..."
         git clone "$REPO_URL" "$REPO_DIR"
     else
-        echo "==> Обновление NShot..."
+        echo "==> Updating NShot..."
         git pull
     fi
     echo
-    echo "==> Готово! Тестовые команды (замените wlan0 на ваш интерфейс):"
+    echo "==> Done! Test commands (replace wlan0 with your interface):"
     if [ "$IN_REPO" = true ]; then
         echo "    sudo python3 nshot.py -i wlan0 -P   # Pixie Dust"
         echo "    sudo python3 nshot.py -i wlan0 -N   # NULL PIN"
-        echo "    sudo python3 nshot.py -i wlan0 -B   # онлайн-брутфорс"
+        echo "    sudo python3 nshot.py -i wlan0 -B   # online brute-force"
     else
         echo "    sudo python3 NShot/nshot.py -i wlan0 -P   # Pixie Dust"
         echo "    sudo python3 NShot/nshot.py -i wlan0 -N   # NULL PIN"
-        echo "    sudo python3 NShot/nshot.py -i wlan0 -B   # онлайн-брутфорс"
+        echo "    sudo python3 NShot/nshot.py -i wlan0 -B   # online brute-force"
     fi
     exit 0
 fi
 
-# --- git: нужен для клонирования/обновления, ставим всегда ---
+# --- git: needed for cloning/updating, always installed ---
 if command -v apt-get >/dev/null 2>&1; then
-    echo "==> Детектирован apt (Debian/Ubuntu)"
-    apt update
-    apt upgrade
-    apt install -y python3 wpasupplicant iw iproute2 pixiewps git
+    echo "==> apt detected (Debian/Ubuntu)"
+    apt-get update
+    apt-get install -y python3 wpasupplicant iw iproute2 pixiewps git
 elif command -v pacman >/dev/null 2>&1; then
-    echo "==> Детектирован pacman (Arch)"
-    pacman -Syu --noconfirm python wpa_supplicant iw iproute2 pixiewps git
+    echo "==> pacman detected (Arch)"
+    pacman -Sy --noconfirm python wpa_supplicant iw iproute2 pixiewps git
 elif command -v dnf >/dev/null 2>&1; then
-    echo "==> Детектирован dnf (Fedora)"
+    echo "==> dnf detected (Fedora)"
     dnf install -y python3 wpa_supplicant iw iproute pixiewps git
 else
-    echo "==> Не удалось определить менеджер пакетов."
-    echo "    Установи вручную: python3, wpa_supplicant, iw, iproute2, pixiewps, git"
+    echo "==> Could not determine the package manager."
+    echo "    Install manually: python3, wpa_supplicant, iw, iproute2, pixiewps, git"
 fi
 
-# --- клонирование при запуске снаружи, обновление при запуске внутри ---
+# --- clone when run outside, update when run inside ---
 if [ "$IN_REPO" = true ]; then
-    echo "==> Обновление NShot..."
+    echo "==> Updating NShot..."
     git pull
     NSHOT_CMD="sudo python3 nshot.py"
 else
-    echo "==> Клонирование NShot..."
+    echo "==> Cloning NShot..."
     git clone "$REPO_URL" "$REPO_DIR"
     NSHOT_CMD="sudo python3 NShot/nshot.py"
 fi
 
 echo
-echo "==> Проверка окружения:"
+echo "==> Environment check:"
 if [ "$IN_REPO" = true ]; then
     python3 nshot.py --check || true
 else
@@ -95,7 +94,7 @@ else
 fi
 
 echo
-echo "==> Готово! Тестовые команды (замените wlan0 на ваш интерфейс):"
+echo "==> Done! Test commands (replace wlan0 with your interface):"
 echo "    $NSHOT_CMD -i wlan0 -P   # Pixie Dust"
 echo "    $NSHOT_CMD -i wlan0 -N   # NULL PIN"
-echo "    $NSHOT_CMD -i wlan0 -B   # онлайн-брутфорс"
+echo "    $NSHOT_CMD -i wlan0 -B   # online brute-force"

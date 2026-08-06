@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Интеграционный тест полного конвейера атаки.
+"""Integration test of the full attack pipeline.
 
-Мокает wpa_supplicant (stdout + control socket) и pixiewps, чтобы прогнать
-весь путь: WPS_REG -> разбор сообщений M1/M4 -> NACK -> Pixie Dust ->
-повторная попытка с найденным PIN -> GOT_PSK -> запись отчёта.
-Не требует root и Wi-Fi-адаптера.
+Mocks wpa_supplicant (stdout + control socket) and pixiewps to exercise the
+whole path: WPS_REG -> M1/M4 message parsing -> NACK -> Pixie Dust -> retry
+with the found PIN -> GOT_PSK -> report write.
+Does not require root or a Wi-Fi adapter.
 """
 
 import sys
@@ -37,7 +37,7 @@ def make_args(**overrides):
 
 
 class FakeSocket:
-    """Поддельный control-сокет wpa_supplicant."""
+    """Fake wpa_supplicant control socket."""
     def __init__(self):
         self.sent = []
         self.reply = b'OK'
@@ -53,7 +53,7 @@ class FakeSocket:
 
 
 class FakeStream:
-    """Поддельный stdout wpa_supplicant: выдаёт строки по очереди."""
+    """Fake wpa_supplicant stdout: yields lines in sequence."""
     def __init__(self, lines):
         self._lines = list(lines)
 
@@ -68,7 +68,7 @@ class FakeStream:
 
 
 class FakeProcess:
-    """Поддельный процесс wpa_supplicant."""
+    """Fake wpa_supplicant process."""
     def __init__(self, *args, **kwargs):
         self._args = args
         self.stdout = FakeStream([])
@@ -90,7 +90,7 @@ class FakeProcess:
 
 
 def _setup(stream_lines, **args_overrides):
-    """Создаёт connection.Initialize с подменённым wpa_supplicant."""
+    """Creates a connection.Initialize with a replaced wpa_supplicant."""
     conn_mod.subprocess.Popen = FakeProcess
     conn_mod.os.path.exists = lambda p: True
     utils_mod.isInterfaceUp = lambda interface: True
@@ -103,7 +103,7 @@ def _setup(stream_lines, **args_overrides):
 
 
 def test_pin_attack_success_writes_report():
-    """Полный успех: PIN -> GOT_PSK -> отчёт в reports/."""
+    """Full success: PIN -> GOT_PSK -> report in reports/."""
     tmpdir = tempfile.mkdtemp()
     utils_mod.REPORTS_DIR = tmpdir + os.sep
 
@@ -117,14 +117,14 @@ def test_pin_attack_success_writes_report():
 
     try:
         result = conn.singleConnection(BSSID, PIN)
-        assert result is True, 'singleConnection должен вернуть True при GOT_PSK'
+        assert result is True, 'singleConnection must return True on GOT_PSK'
         assert conn.CONNECTION_STATUS.WPA_PSK == PSK, conn.CONNECTION_STATUS.WPA_PSK
         assert conn.CONNECTION_STATUS.ESSID == 'TestNet', conn.CONNECTION_STATUS.ESSID
 
         wps_cmds = [c for c in conn.RETSOCK.sent if c.startswith('WPS_REG')]
         assert wps_cmds == [f'WPS_REG {BSSID} {PIN}'], wps_cmds
 
-        # Отчёт сохранён
+        # Report saved
         txt = open(os.path.join(tmpdir, 'stored.txt'), encoding='utf-8').read()
         assert PSK in txt and BSSID in txt, txt
         recs = json.load(open(os.path.join(tmpdir, 'stored.json'), encoding='utf-8'))
@@ -134,7 +134,7 @@ def test_pin_attack_success_writes_report():
 
 
 def test_wrong_pin_returns_false():
-    """Неправильный PIN (WSC_NACK на M4) -> False, без retry и без отчёта."""
+    """Wrong PIN (WSC_NACK on M4) -> False, no retry, no report."""
     lines = [
         "WPS: Building Message M4",
         "WPS: Received WSC_NACK",
@@ -145,14 +145,14 @@ def test_wrong_pin_returns_false():
         result = conn.singleConnection(BSSID, '99999999')
         assert result is False
         assert conn.CONNECTION_STATUS.STATUS == 'WSC_NACK'
-        # После неудачи шлётся WPS_CANCEL
+        # After a failure WPS_CANCEL is sent
         assert 'WPS_CANCEL' in conn.RETSOCK.sent, conn.RETSOCK.sent
     finally:
         conn._cleanup()
 
 
 def test_locked_retries_then_succeeds():
-    """WPS-lock на M1 -> повтор через timeout=0 -> успех."""
+    """WPS lock on M1 -> retry through timeout=0 -> success."""
     lines = [
         "WPS: Building Message M1",
         "WPS: Received WSC_NACK",      # LAST_M_MESSAGE=1 -> locked
@@ -165,14 +165,14 @@ def test_locked_retries_then_succeeds():
         result = conn.singleConnection(BSSID, PIN)
         assert result is True
         wps_regs = [c for c in conn.RETSOCK.sent if c.startswith('WPS_REG')]
-        assert len(wps_regs) == 2, f'ожидалось 2 попытки, получено {len(wps_regs)}'
+        assert len(wps_regs) == 2, f'expected 2 attempts, got {len(wps_regs)}'
     finally:
         conn._cleanup()
 
 
 def test_pixie_dust_collects_data_and_uses_pin():
-    """Pixie Dust: собирает данные -> WSC_NACK -> pixiewps -> PIN -> успех."""
-    # Данные Pixie Dust в формате wpa_supplicant hexdump
+    """Pixie Dust: collect data -> WSC_NACK -> pixiewps -> PIN -> success."""
+    # Pixie Dust data in wpa_supplicant hexdump format
     def hx(nbytes):
         return 'AB' * nbytes
 
@@ -185,12 +185,12 @@ def test_pixie_dust_collects_data_and_uses_pin():
         f"WPS: DH own Public Key (hexdump)(192): {hx(192)}",
         f"WPS: DH peer Public Key (hexdump)(192): {hx(192)}",
         "WPS: Building Message M4",
-        "WPS: Received WSC_NACK",   # PIN из getLikely не подошёл -> идём в pixiewps
+        "WPS: Received WSC_NACK",   # PIN from getLikely did not work -> go to pixiewps
         "WPS: Building Message M1",
-        f"WPS: Network Key (hexdump)(32): {PSK_HEX}",  # повтор с PIN от pixiewps
+        f"WPS: Network Key (hexdump)(32): {PSK_HEX}",  # retry with the pixiewps PIN
     ]
 
-    # Мокаем запуск pixiewps
+    # Mock the pixiewps launch
     pixie_cmds = []
 
     def fake_pixie_run(cmd, **kwargs):
@@ -203,12 +203,12 @@ def test_pixie_dust_collects_data_and_uses_pin():
 
     try:
         result = conn.singleConnection(BSSID)
-        assert result is True, 'Pixie Dust путь должен закончиться успехом'
+        assert result is True, 'Pixie Dust path must end in success'
         assert conn.CONNECTION_STATUS.WPA_PSK == PSK
-        assert pixie_cmds, 'pixiewps не вызывался'
+        assert pixie_cmds, 'pixiewps was not called'
         cmd = pixie_cmds[0]
         assert cmd[0] == 'pixiewps'
-        # PIN от pixiewps использован во второй попытке
+        # The pixiewps PIN was used in the retry
         wps_regs = [c for c in conn.RETSOCK.sent if c.startswith('WPS_REG')]
         assert any(c.endswith(' 12345670') for c in wps_regs), wps_regs
     finally:
@@ -216,7 +216,7 @@ def test_pixie_dust_collects_data_and_uses_pin():
 
 
 def test_bruteforce_quick_success():
-    """smartBruteforce с 7-значной маской: одна попытка -> M7 -> PIN найден."""
+    """smartBruteforce with a 7-digit mask: one attempt -> M7 -> PIN found."""
     conn_mod.subprocess.Popen = FakeProcess
     conn_mod.os.path.exists = lambda p: True
     utils_mod.isInterfaceUp = lambda interface: True
@@ -231,16 +231,16 @@ def test_bruteforce_quick_success():
 
     def fake_single_connection(bssid, pin):
         tried_pins.append(pin)
-        # M7 получено -> вторая половина PIN верна -> успех
+        # M7 received -> the second half of the PIN is correct -> success
         bf.CONNECTION.CONNECTION_STATUS.LAST_M_MESSAGE = 7
 
     bf.CONNECTION.singleConnection = fake_single_connection
 
     try:
         bf.smartBruteforce(BSSID, '1234567')
-        # Ожидаемый PIN: '1234' + '567' + контрольная сумма(1234567)=0
+        # Expected PIN: '1234' + '567' + checksum(1234567)=0
         assert tried_pins == ['12345670'], tried_pins
-        # Сессия сохранена с текущей маской
+        # Session saved with the current mask
         sess = open(os.path.join(tmpdir, BSSID.replace(':', '') + '.run'), encoding='utf-8').read()
         assert sess == '1234567', sess
     finally:
@@ -248,7 +248,7 @@ def test_bruteforce_quick_success():
 
 
 def test_bruteforce_abort_saves_session():
-    """Прерывание брутфорса сохраняет прогресс (маску) в сессию."""
+    """Aborting brute-force saves progress (the mask) into the session."""
     conn_mod.subprocess.Popen = FakeProcess
     conn_mod.os.path.exists = lambda p: True
     utils_mod.isInterfaceUp = lambda interface: True
@@ -260,7 +260,7 @@ def test_bruteforce_abort_saves_session():
     bf = bf_mod.Initialize('wlan0', args)
 
     def fake_single_connection(bssid, pin):
-        raise KeyboardInterrupt  # пользователь прервал перебор
+        raise KeyboardInterrupt  # the user aborted the loop
 
     bf.CONNECTION.singleConnection = fake_single_connection
 
@@ -273,7 +273,7 @@ def test_bruteforce_abort_saves_session():
 
 
 def test_null_pin_mode_uses_zero_pin():
-    """NULL PIN (-N): singleConnection с null_pin=True шлёт WPS_REG с PIN 00000000."""
+    """NULL PIN (-N): singleConnection with null_pin=True sends WPS_REG with PIN 00000000."""
     lines = [
         "WPS: Building Message M1",
         "WPS: Received M1",
@@ -282,8 +282,8 @@ def test_null_pin_mode_uses_zero_pin():
     ]
     conn, _ = _setup(lines, null_pin=True)
     try:
-        result = conn.singleConnection(BSSID)  # без явного pin
-        assert result is True, 'NULL PIN путь должен завершиться успехом'
+        result = conn.singleConnection(BSSID)  # without an explicit pin
+        assert result is True, 'NULL PIN path must end in success'
         wps_regs = [c for c in conn.RETSOCK.sent if c.startswith('WPS_REG')]
         assert wps_regs == [f'WPS_REG {BSSID} 00000000'], wps_regs
     finally:
@@ -291,7 +291,7 @@ def test_null_pin_mode_uses_zero_pin():
 
 
 def test_pbc_mode_uses_wps_pbc():
-    """PBC: singleConnection(pbc_mode=True) отправляет WPS_PBC и ждёт Network Key."""
+    """PBC: singleConnection(pbc_mode=True) sends WPS_PBC and waits for a Network Key."""
     lines = [
         "WPS: Starting PBC",
         "WPS: Building Message M1",
@@ -300,7 +300,7 @@ def test_pbc_mode_uses_wps_pbc():
     conn, _ = _setup(lines)
     try:
         result = conn.singleConnection(BSSID, pbc_mode=True)
-        assert result is True, 'PBC путь должен завершиться успехом'
+        assert result is True, 'PBC path must end in success'
         assert any(c.startswith('WPS_PBC') for c in conn.RETSOCK.sent), conn.RETSOCK.sent
         assert conn.CONNECTION_STATUS.WPA_PSK == PSK, conn.CONNECTION_STATUS.WPA_PSK
     finally:
@@ -316,4 +316,4 @@ if __name__ == '__main__':
     test_bruteforce_abort_saves_session()
     test_null_pin_mode_uses_zero_pin()
     test_pbc_mode_uses_wps_pbc()
-    print('Интеграционные тесты атаки прошли ✅')
+    print('Attack integration tests passed ✅')

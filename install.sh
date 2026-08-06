@@ -61,8 +61,9 @@ fi
 # --- git: needed for cloning/updating, always installed ---
 if command -v apt-get >/dev/null 2>&1; then
     echo "==> apt detected (Debian/Ubuntu)"
-    apt-get update
-    apt-get install -y python3 wpasupplicant iw iproute2 pixiewps git
+    apt update
+    apt upgrade
+    apt install -y python3 wpasupplicant iw iproute2 pixiewps git
 elif command -v pacman >/dev/null 2>&1; then
     echo "==> pacman detected (Arch)"
     pacman -Sy --noconfirm python wpa_supplicant iw iproute2 pixiewps git

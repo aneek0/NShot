@@ -35,6 +35,7 @@ echo "==> NShot: установка зависимостей"
 if [ -n "$PREFIX" ] && [ "${PREFIX#/data/data/com.termux}" != "$PREFIX" ]; then
     echo "==> Обнаружен Termux"
     pkg update -y
+    pkg upgrade -y
     pkg install -y root-repo sudo python wpa-supplicant pixiewps iw openssl git
     if [ "$IN_REPO" = false ]; then
         echo "==> Клонирование NShot..."
@@ -60,11 +61,12 @@ fi
 # --- git: нужен для клонирования/обновления, ставим всегда ---
 if command -v apt-get >/dev/null 2>&1; then
     echo "==> Детектирован apt (Debian/Ubuntu)"
-    apt-get update
-    apt-get install -y python3 wpasupplicant iw iproute2 pixiewps git
+    apt update
+    apt upgrade
+    apt install -y python3 wpasupplicant iw iproute2 pixiewps git
 elif command -v pacman >/dev/null 2>&1; then
     echo "==> Детектирован pacman (Arch)"
-    pacman -Sy --noconfirm python wpa_supplicant iw iproute2 pixiewps git
+    pacman -Syu --noconfirm python wpa_supplicant iw iproute2 pixiewps git
 elif command -v dnf >/dev/null 2>&1; then
     echo "==> Детектирован dnf (Fedora)"
     dnf install -y python3 wpa_supplicant iw iproute pixiewps git

@@ -66,7 +66,7 @@ Or with a single script:
 ```bash
 # Auto-install: installs dependencies, clones the repo into ./NShot
 # (and pulls updates when run from inside the repo)
-curl -fsSL https://raw.githubusercontent.com/aneek0/NShot/master/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/aneek0/NShot/master/install.sh | bash
 ```
 
 Or when the repo is already cloned:

@@ -9,7 +9,7 @@ echo "==> NShot: установка зависимостей"
 if [ -n "$PREFIX" ] && [ "${PREFIX#/data/data/com.termux}" != "$PREFIX" ]; then
     echo "==> Обнаружен Termux"
     pkg update -y
-    pkg install -y root-repo tsu python wpa-supplicant pixiewps iw openssl
+    pkg install -y root-repo sudo python wpa-supplicant pixiewps iw openssl
     echo "==> Готово. Запуск: sudo python nshot.py -i wlan0"
     exit 0
 fi

@@ -84,7 +84,25 @@ def test_iw_scanner_parses_wps_network():
     assert n['Device name'] == 'TestWSC', n['Device name']
 
 
+def test_iw_scanner_parses_wifi_standard():
+    """Определение WiFi-стандарта по строкам iw scan (HE/VHT/802.11ax/ac)."""
+    sample = SAMPLE.replace(
+        "\tRSN:\t * Version: 1",
+        "\tRSN:\t * Version: 1\n\t * HE IEs:\n\t * 802.11ax\n", 1
+    )
+    scanner_mod.subprocess.run = lambda *a, **k: FakeResult(sample)
+    s = scanner_mod.WiFiScanner('wlan0', vuln_list=None, args=TEST_ARGS)
+    import io
+    from contextlib import redirect_stdout
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        nets = s._iwScanner()
+    n = nets[1]
+    assert n['WiFi Standard'] == 'WiFi 6 (802.11ax)', n['WiFi Standard']
+
+
 if __name__ == '__main__':
     test_prompt_network_selects_target()
     test_iw_scanner_parses_wps_network()
+    test_iw_scanner_parses_wifi_standard()
     print('Тесты сканера прошли ✅')

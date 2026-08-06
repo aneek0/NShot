@@ -97,7 +97,8 @@ class WiFiScanner:
                     'WPS locked': False,
                     'Model': '',
                     'Model number': '',
-                    'Device name': ''
+                    'Device name': '',
+                    'WiFi Standard': ''
                 }
             )
             networks[-1]['BSSID'] = result.group(1).upper()
@@ -168,6 +169,13 @@ class WiFiScanner:
             d = result.group(1)
             networks[-1]['Device name'] = codecs.decode(d, 'unicode-escape').encode('latin1').decode('utf-8', errors='replace')
 
+        def handleWifiStandard(_line, result, networks):
+            line = _line.upper()
+            if 'HE' in line or '802.11AX' in line:
+                networks[-1]['WiFi Standard'] = 'WiFi 6 (802.11ax)'
+            elif 'VHT' in line or '802.11AC' in line:
+                networks[-1]['WiFi Standard'] = 'WiFi 5 (802.11ac)'
+
         networks = []
         matchers = {
             re.compile(r'BSS (\S+)( )?\(on \w+\)'): handleNetwork,
@@ -176,6 +184,7 @@ class WiFiScanner:
             re.compile(r'(capability): (.+)'): handleSecurityType,
             re.compile(r'(RSN):\t [*] Version: (\d+)'): handleSecurityType,
             re.compile(r'(WPA):\t [*] Version: (\d+)'): handleSecurityType,
+            re.compile(r'.*(HE |VHT |802\.11ax|802\.11ac).*'): handleWifiStandard,
             re.compile(r'WPS:\t [*] Version: (([0-9]*[.])?[0-9]+)'): handleWps,
             re.compile(r' [*] Version2: (.+)'): handleWpsVersion,
             re.compile(r' [*] Authentication suites: (.+)'): handleSecurityType,
@@ -271,13 +280,14 @@ class WiFiScanner:
             'bssid': 18,
             'essid': entryMaxLength('ESSID'),
             'name': entryMaxLength('Device name'),
-            'model': entryMaxLength('Model')
+            'model': entryMaxLength('Model'),
+            'wifi': entryMaxLength('WiFi Standard')
         }
 
-        row = '{:<{#}} {:<{bssid}} {:<{essid}} {:<{sec}} {:<{#}} {:<{#}} {:<{name}} {:<{model}}'
+        row = '{:<{#}} {:<{bssid}} {:<{essid}} {:<{sec}} {:<{#}} {:<{#}} {:<{wifi}} {:<{name}} {:<{model}}'
 
         print(row.format(
-            '#', 'BSSID', 'ESSID', 'Sec.', 'PWR', 'Ver.', 'WSC name', 'WSC model',
+            '#', 'BSSID', 'ESSID', 'Sec.', 'PWR', 'Ver.', 'WiFi', 'WSC name', 'WSC model',
             **columm_lengths
         ))
 
@@ -292,7 +302,7 @@ class WiFiScanner:
             line = row.format(
                 number, network['BSSID'], essid,
                 network['Security type'], network['Level'],
-                network['WPS version'], device_name, model,
+                network['WPS version'], network['WiFi Standard'], device_name, model,
                 **columm_lengths
             )
             if (network['BSSID'], network['ESSID']) in self.STORED:

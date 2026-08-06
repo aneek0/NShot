@@ -52,12 +52,15 @@ NShot v1.0 - тестирование защиты WPS: Pixie Dust, онлайн
     )
 
     attack_group = parser.add_argument_group('Режимы атаки')
-    attack_pin_group = attack_group.add_mutually_exclusive_group()
-    attack_pin_group.add_argument(
+    # -p/--pin вынесен из mutually exclusive группы: он комбинируется с -B
+    # (стартовая маска брутфорса) и с другими режимами как явный PIN.
+    attack_group.add_argument(
         '-p', '--pin',
         type=str,
-        help='Использовать указанный PIN (произвольная строка или 4/8-значный PIN)'
+        help='Использовать указанный PIN (произвольная строка или 4/8-значный PIN);\n'
+             'в паре с -B/--bruteforce задаёт стартовую маску брутфорса'
     )
+    attack_pin_group = attack_group.add_mutually_exclusive_group()
     attack_pin_group.add_argument(
         '-N', '--null-pin',
         action='store_true',

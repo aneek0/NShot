@@ -110,8 +110,31 @@ def test_run_check_warns_on_wired_interface():
     assert 'Внимание' not in buf2.getvalue()
 
 
+def test_args_combine_bruteforce_with_pin():
+    """-B -p 1234 (брутфорс со стартовой маской) парсится вместе; конфликты - отклоняются."""
+    import src.args as args_mod
+
+    def parse(argv):
+        args_mod.parseArgs = args_mod.parseArgs  # реальная функция
+        sys.argv = argv
+        try:
+            return args_mod.parseArgs(), None
+        except SystemExit:
+            return None, 'exit'
+
+    # Комбинация из README: брутфорс + стартовая маска
+    a, err = parse(['nshot.py', '-i', 'wlan0', '-b', 'AA:BB:CC:DD:EE:FF', '-B', '-p', '1234'])
+    assert err is None, f'-B -p 1234 должен парситься: {err}'
+    assert a.bruteforce is True and a.pin == '1234', (a.bruteforce, a.pin)
+
+    # Взаимоисключающие режимы по-прежнему отклоняются
+    _, err = parse(['nshot.py', '-i', 'wlan0', '-P', '-B'])
+    assert err == 'exit', 'Pixie Dust + брутфорс должны конфликтовать'
+
+
 if __name__ == '__main__':
     test_run_check_warns_on_wired_interface()
     test_main_single_run_with_kill_restore_iface_down()
     test_main_loop_continues_until_keyboard_interrupt()
+    test_args_combine_bruteforce_with_pin()
     print('Тесты оркестрации CLI прошли ✅')

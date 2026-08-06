@@ -70,8 +70,6 @@ class WiFiScanner:
                 network_no = input('Select target (press Enter to refresh): ')
 
                 if network_no.lower() in {'r', '0', ''}:
-                    if self.ARGS.clear:
-                        src.utils.clearScreen()
                     result = self.promptNetwork()
                     if result is None:
                         continue
@@ -87,6 +85,10 @@ class WiFiScanner:
 
     def _iwScanner(self) -> dict[int, dict] | bool:
         """Parsing iw scan results."""
+
+        # Перед каждым запуском сканера очищаем экран, чтобы предыдущие
+        # таблицы не накапливались (и начальный запуск, и refresh по Enter).
+        src.utils.clearScreen()
 
         def handleNetwork(_line, result, networks):
             networks.append(

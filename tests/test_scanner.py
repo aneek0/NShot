@@ -101,8 +101,35 @@ def test_iw_scanner_parses_wifi_standard():
     assert n['WiFi Standard'] == 'WiFi 6 (802.11ax)', n['WiFi Standard']
 
 
+def test_scanner_clears_screen_before_each_scan():
+    """Перед каждым запуском сканера (инициальный и refresh по Enter) экран чистится."""
+    import builtins
+    import io
+    from contextlib import redirect_stdout
+
+    scanner_mod.subprocess.run = lambda *a, **k: FakeResult(SAMPLE)
+    clears = []
+    scanner_mod.src.utils.clearScreen = lambda: clears.append(1)
+
+    real_input = builtins.input
+    inputs = iter(['', '1'])  # Enter -> refresh, затем выбор цели
+    builtins.input = lambda prompt='': next(inputs)
+    try:
+        s = scanner_mod.WiFiScanner('wlan0', vuln_list=None, args=TEST_ARGS)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            result = s.promptNetwork()
+    finally:
+        builtins.input = real_input
+
+    assert result is not None
+    # Начальный скан + refresh по Enter = минимум 2 очистки экрана
+    assert len(clears) >= 2, f'ожидалось минимум 2 очистки, было: {clears}'
+
+
 if __name__ == '__main__':
     test_prompt_network_selects_target()
     test_iw_scanner_parses_wps_network()
     test_iw_scanner_parses_wifi_standard()
+    test_scanner_clears_screen_before_each_scan()
     print('Тесты сканера прошли ✅')

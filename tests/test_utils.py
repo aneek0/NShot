@@ -114,9 +114,81 @@ def test_add_vulnerable_ap_appends_and_dedups():
             os.remove(tmp)
 
 
+def test_kill_interfering_kills_and_saves():
+    """killInterfering убивает мешающие процессы и сохраняет их для восстановления."""
+    tmp = tempfile.mkdtemp()
+    u.SESSIONS_DIR = tmp + os.sep
+
+    killed = []
+    real_open = open
+
+    def fake_open(file, *a, **k):
+        name = file if isinstance(file, str) else file.name
+        if name == '/proc/net/netlink':
+            return io.StringIO('sk Eth Pid Groups Lock Drops Rmem Dode Dump Locks Inode\n'
+                               'f1 16 1234 0 0 0 0 0 0 0 555\n')
+        if name == '/proc/1234/comm':
+            return io.StringIO('NetworkManager')
+        if name == '/proc/1234/cmdline':
+            return io.StringIO('NetworkManager\x00--foo')
+        if name.endswith('killed_processes.json'):
+            # Запись/чтение файла сохранения — делегируем реальному open
+            return real_open(file, *a, **k)
+        raise FileNotFoundError(name)
+
+    def fake_kill(pid, sig):
+        killed.append((pid, sig))
+
+    with mock.patch('builtins.open', side_effect=fake_open), \
+         mock.patch.object(u.os, 'scandir', return_value=[FakeDirEntry('/proc/1234/fd/3')]), \
+         mock.patch.object(u.os, 'readlink', return_value='socket:[555]'), \
+         mock.patch.object(u.os, 'kill', side_effect=fake_kill), \
+         mock.patch.object(u, 'time'):
+
+        u.killInterfering()
+
+    assert killed == [(1234, 15)], killed
+    saved = real_open(os.path.join(tmp, 'killed_processes.json'), encoding='utf-8').read()
+    assert 'NetworkManager' in saved and '1234' in saved, saved
+
+
+def test_restore_processes_relaunches():
+    """restoreProcesses перезапускает сохранённые процессы по cmdline."""
+    tmp = tempfile.mkdtemp()
+    u.SESSIONS_DIR = tmp + os.sep
+    with open(os.path.join(tmp, 'killed_processes.json'), 'w', encoding='utf-8') as f:
+        f.write('[["1234", "NetworkManager", "NetworkManager --foo"]]')
+
+    launched = []
+    class FakePopen:
+        def __init__(self, cmdline, *a, **k):
+            launched.append(cmdline)
+
+    u.subprocess.Popen = FakePopen
+    u.restoreProcesses()
+    assert launched == ['NetworkManager --foo'], launched
+
+
+def test_restore_processes_no_file_is_noop():
+    """restoreProcesses без файла с сохранёнными процессами ничего не делает."""
+    tmp = tempfile.mkdtemp()
+    u.SESSIONS_DIR = tmp + os.sep
+    launched = []
+    class FakePopen:
+        def __init__(self, cmdline, *a, **k):
+            launched.append(cmdline)
+    u.subprocess.Popen = FakePopen
+    u.restoreProcesses()
+    assert launched == [], launched
+
+
 if __name__ == '__main__':
     test_get_interfering_processes()
+    test_ignores_netlink_processes_that_do_not_hold_socket()
     test_is_interface_up()
     test_iface_ctl_builds_command()
     test_add_vulnerable_ap_appends_and_dedups()
+    test_kill_interfering_kills_and_saves()
+    test_restore_processes_relaunches()
+    test_restore_processes_no_file_is_noop()
     print('Тесты utils прошли ✅')

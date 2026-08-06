@@ -5,8 +5,8 @@
 #    - OneShot (https://github.com/kimocoder/OneShot)  -> автор rofl0r, форк kimocoder
 #    - OneShot-Extended (https://github.com/chkndrp/OneShot-Extended)
 #
-#  Это свободное ПО; вы можете распространять и/или изменять его на условиях
-#  GNU General Public License v2 (см. файл LICENSE).
+#  This program is free software, distributed under the GNU General Public
+#  License, version 3 or later. See the LICENSE file for details.
 #
 #  ВНИМАНИЕ: использовать ТОЛЬКО на собственных или явно авторизованных сетях.
 #  Несанкционированный доступ к чужим сетям незаконен.

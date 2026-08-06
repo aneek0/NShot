@@ -1,48 +1,47 @@
 # NShot
 
-Тестирование защиты WPS своих сетей: **Pixie Dust**, **онлайн-брутфорс PIN**,
-**предсказание PIN по BSSID** и **подключение по кнопке (PBC)** — без режима монитора,
-через `wpa_supplicant`.
+Testing WPS security of your own networks: **Pixie Dust**, **online PIN
+brute-force**, **PIN prediction from BSSID** and **push-button connection
+(PBC)** — without monitor mode, through `wpa_supplicant`.
 
-Собран из открытых проектов [OneShot](https://github.com/kimocoder/OneShot)
-и [OneShot-Extended](https://github.com/chkndrp/OneShot-Extended).
-Полная атрибуция — в [CREDITS.md](CREDITS.md).
+Built from the open-source projects [OneShot](https://github.com/kimocoder/OneShot)
+and [OneShot-Extended](https://github.com/chkndrp/OneShot-Extended).
+Full attribution in [CREDITS.md](CREDITS.md).
 
-> ⚠️ **Только для собственных или явно авторизованных сетей.**
-> Использование против чужих сетей незаконно и преследуется по закону.
-
----
-
-## Возможности
-
-- 🔍 Сканер сетей через `iw` с подсветкой:
-  - уязвимые модели из списка (`vulnwsc.txt`) — зелёным
-  - уязвимая версия WPS `1.0` — тёмно-зелёным
-  - заблокированный WPS — красным
-  - уже сохранённые сети — жёлтым
-- ⚡ Pixie Dust (офлайн-атака через `pixiewps`)
-- 🔢 Онлайн-брутфорс PIN (маска 4/7/8 цифр, с сохранением сессии)
-- 🎯 Предсказание PIN по BSSID (алгоритмы 3WiFi, D-Link, ASUS, Broadcom и др.)
-- 📇 Статик-PIN для 52 моделей роутеров (TP-Link, Netgear, Belkin, D-Link и др.),
-  MAC-специфичные PIN подставляются автоматически по OUI
-- 📶 Определение WiFi-стандарта (WiFi 6/5) в таблице сканера, Android fallback-скан
-  через `cmd wifi`/`dumpsys` когда `iw` недоступен
-- 🔘 WPS PBC и NULL PIN (`-N`)
-- 🧹 Авто-убийство мешающих процессов (`--kill`) и восстановление (`--restore`)
-- 📊 Сохранение результатов в `reports/stored.{txt,csv,json}`
-- 🔎 Самопроверка окружения (`--check`)
-- 🤖 Работает на Linux и Android/Termux (root), Python ≥ 3.10, без pip-зависимостей
+> ⚠️ **For your own or explicitly authorized networks only.**
+> Using this against someone else's networks is illegal and prosecuted by law.
 
 ---
 
-## Установка
+## Features
 
-Python-пакеты не требуются: NShot работает только на стандартной библиотеке
-Python 3.10+, никакие pip-зависимости ставить не нужно.
+- 🔍 Network scanner via `iw` with highlighting:
+  - vulnerable models from the list (`vulnwsc.txt`) — green
+  - vulnerable WPS version `1.0` — dark green
+  - locked WPS — red
+  - already saved networks — yellow
+- ⚡ Pixie Dust (offline attack via `pixiewps`)
+- 🔢 Online PIN brute-force (4/7/8-digit mask, session resume)
+- 🎯 PIN prediction from BSSID (3WiFi, D-Link, ASUS, Broadcom and other algorithms)
+- 📇 Static PINs for 52 router models (TP-Link, Netgear, Belkin, D-Link, etc.),
+  MAC-specific PINs are suggested automatically by OUI
+- 📶 WiFi standard detection (WiFi 6/5) in the scanner table, Android fallback scan
+  via `cmd wifi`/`dumpsys` when `iw` is unavailable
+- 🔘 WPS PBC and NULL PIN (`-N`)
+- 🧹 Auto-kill of interfering processes (`--kill`) and restore (`--restore`)
+- 📊 Results saved to `reports/stored.{txt,csv,json}`
+- 🔎 Environment self-check (`--check`)
+- 🤖 Runs on Linux and Android/Termux (root), Python ≥ 3.10, no pip dependencies
 
-Из обычных системных утилит нужны бинарники: `python3`, `wpa_supplicant`, `iw`,
-`ip` (iproute2), а для Pixie Dust — `pixiewps`. Всё, кроме pixiewps, требуется в
-любом режиме.
+---
+
+## Installation
+
+No Python packages are required: NShot runs on the Python 3.10+ standard library
+only, there are no pip dependencies to install.
+
+System utilities needed: `python3`, `wpa_supplicant`, `iw`, `ip` (iproute2), and
+`pixiewps` for Pixie Dust. Everything except pixiewps is required in any mode.
 
 ```bash
 # Debian / Ubuntu
@@ -52,117 +51,118 @@ sudo apt install -y python3 wpasupplicant iw iproute2 pixiewps
 sudo pacman -S python wpa_supplicant iw iproute2 pixiewps
 ```
 
-Или одним скриптом:
+Or with a single script:
 
 ```bash
 chmod +x install.sh && sudo ./install.sh
 ```
 
-Для Android/Termux (root): `pkg install -y root-repo tsu python wpa-supplicant pixiewps iw openssl`
+For Android/Termux (root): `pkg install -y root-repo tsu python wpa-supplicant pixiewps iw openssl`
 
-### Проверка окружения
+### Environment check
 
 ```bash
 python3 nshot.py --check
 ```
 
-Покажет статус прав, бинарников и интерфейса и скажет, какие режимы доступны.
+Shows the status of privileges, binaries and the interface, and tells you which
+modes are available.
 
 ---
 
-## Использование
+## Usage
 
 ```bash
-sudo python3 nshot.py -i wlan0                  # сканировать и выбрать цель
-sudo python3 nshot.py -i wlan0 -P               # Pixie Dust после выбора цели
+sudo python3 nshot.py -i wlan0                  # scan and pick a target
+sudo python3 nshot.py -i wlan0 -P               # Pixie Dust after picking a target
 sudo python3 nshot.py -i wlan0 -b 00:90:4C:C1:AC:21 -P
-sudo python3 nshot.py -i wlan0 -b 00:90:4C:C1:AC:21 -B        # онлайн-брутфорс
-sudo python3 nshot.py -i wlan0 -b 00:90:4C:C1:AC:21 -B -p 1234  # с первой половиной PIN
-sudo python3 nshot.py -i wlan0 -b 00:90:4C:C1:AC:21 -p 12345670 # с конкретным PIN
+sudo python3 nshot.py -i wlan0 -b 00:90:4C:C1:AC:21 -B        # online brute-force
+sudo python3 nshot.py -i wlan0 -b 00:90:4C:C1:AC:21 -B -p 1234  # with first half of PIN
+sudo python3 nshot.py -i wlan0 -b 00:90:4C:C1:AC:21 -p 12345670 # with a specific PIN
 sudo python3 nshot.py -i wlan0 -b 00:90:4C:C1:AC:21 -N          # NULL PIN
 sudo python3 nshot.py -i wlan0 --pbc                             # PBC
 ```
 
-### Ключевые опции
+### Key options
 
-| Опция | Что делает |
+| Option | What it does |
 |---|---|
-| `-i, --interface` | Wi-Fi интерфейс (например `wlan0`) |
-| `-b, --bssid` | Целевая точка доступа |
-| `-p, --pin` | Свой PIN (строка или 4/8 цифр) |
-| `-N, --null-pin` | Пробовать нулевой PIN |
-| `-P, --pixie-dust` | Атака Pixie Dust |
-| `-B, --bruteforce` | Онлайн-брутфорс |
-| `--pbc` | Подключение по кнопке |
-| `-k / -r` | Убить мешающие процессы / восстановить их при выходе |
-| `-w, --write` | Сохранять результаты в `reports/` |
-| `-l, --loop` | Работать в цикле |
-| `-c, --clear` | Очищать экран при сканировании |
-| `-d, --delay` | Задержка между попытками PIN (сек) |
-| `-t, --timeout` | Пауза при WPS-локе (сек) |
-| `-F, --pixie-force` | Pixiewps с `--force` (полный диапазон) |
-| `-S, --show-pixie` | Показывать команду pixiewps |
-| `-I, --iface-down` | Опустить интерфейс по завершении |
-| `-M, --mtk-wifi` | Драйвер MediaTek Wi-Fi (Android) |
-| `-D, --dont-touch-settings` | Не трогать настройки Wi-Fi на Android |
-| `--vuln-list` | Свой список уязвимых устройств |
-| `--check` | Проверка окружения |
+| `-i, --interface` | Wi-Fi interface (e.g. `wlan0`) |
+| `-b, --bssid` | Target access point |
+| `-p, --pin` | Your PIN (string or 4/8 digits) |
+| `-N, --null-pin` | Try the null PIN |
+| `-P, --pixie-dust` | Pixie Dust attack |
+| `-B, --bruteforce` | Online brute-force |
+| `--pbc` | Push-button connection |
+| `-k / -r` | Kill interfering processes / restore them on exit |
+| `-w, --write` | Save results to `reports/` |
+| `-l, --loop` | Work in a loop |
+| `-c, --clear` | Clear screen when scanning |
+| `-d, --delay` | Delay between PIN attempts (sec) |
+| `-t, --timeout` | Pause on WPS lock (sec) |
+| `-F, --pixie-force` | Pixiewps with `--force` (full range) |
+| `-S, --show-pixie` | Show the pixiewps command |
+| `-I, --iface-down` | Bring the interface down on exit |
+| `-M, --mtk-wifi` | MediaTek Wi-Fi driver (Android) |
+| `-D, --dont-touch-settings` | Don't touch Wi-Fi settings on Android |
+| `--vuln-list` | Your own list of vulnerable devices |
+| `--check` | Environment check |
 
 ---
 
-## Результаты
+## Results
 
-При успешном взломе и наличии флага `-w/--write` в `reports/` пишутся три файла:
+On a successful crack with the `-w/--write` flag, three files are written to `reports/`:
 
-- `stored.txt` — читаемый отчёт
-- `stored.csv` — таблица (используется для подсветки уже известных сетей)
-- `stored.json` — машинно-читаемый отчёт для автоматизации
+- `stored.txt` — human-readable report
+- `stored.csv` — table (used to highlight already known networks)
+- `stored.json` — machine-readable report for automation
 
-> Совет: всегда добавляй `-w`, чтобы не потерять найденный PIN/пароль.
-> Команда `--check` подскажет, что для WPS-атак нужен именно Wi-Fi-интерфейс (обычно `wlan0`), а не проводной.
+> Tip: always add `-w` so you don't lose a found PIN/password.
+> `--check` tells you that WPS attacks need a Wi-Fi interface (usually `wlan0`), not a wired one.
 
-Сессии онлайн-брутфорса сохраняются в `~/.NShot/sessions/`, найденные PIN —
-в `~/.NShot/pixiewps/`.
-
----
-
-## Как это работает
-
-NShot поднимает собственный экземпляр `wpa_supplicant` на временном конфиге и
-общается с ним через управляющий сокет. Это позволяет:
-
-- запрашивать у точки WPS-транзакции без переключения в monitor mode;
-- собирать параметры (PKE, E-Hash1/2, nonce'ы и т.д.) для офлайн-атаки
-  Pixie Dust через `pixiewps`;
-- перебирать PIN онлайн, отслеживая WPS-lock и WPS-FAIL.
+Online brute-force sessions are saved in `~/.NShot/sessions/`, found PINs in
+`~/.NShot/pixiewps/`.
 
 ---
 
-## Тесты
+## How it works
 
-Все тесты не требуют root и Wi-Fi-адаптера (запуск `wpa_supplicant`/`pixiewps` мокается).
+NShot starts its own `wpa_supplicant` instance on a temporary config and talks to
+it through the control socket. This allows:
+
+- requesting WPS transactions from the AP without switching to monitor mode;
+- collecting parameters (PKE, E-Hash1/2, nonces, etc.) for the offline Pixie Dust
+  attack through `pixiewps`;
+- brute-forcing the PIN online while tracking WPS-lock and WPS-FAIL.
+
+---
+
+## Tests
+
+All tests need no root and no Wi-Fi adapter (`wpa_supplicant`/`pixiewps` runs are mocked).
 
 ```bash
-python3 tests/run_all.py                     # весь набор сразу
-python3 tests/test_generator.py             # генератор PIN, контрольная сумма, MAC
-python3 tests/test_scanner.py              # парсер вывода iw scan
-python3 tests/test_engine.py               # движок атак: pixiewps, wpa_supplicant, брутфорс
-python3 tests/test_utils.py                # utils: /proc, ip link, список уязвимых
-python3 tests/test_android.py             # android: команды cmd wifi / settings
-python3 tests/test_fullflow.py          # сквозной: скан -> выбор цели -> WPS -> отчёт
-python3 tests/test_integration.py          # полный конвейер атаки (PIN, retry, Pixie Dust, отчёт)
-python3 tests/test_cli.py                 # оркестрация CLI: kill/restore, iface up/down, loop
+python3 tests/run_all.py                     # the whole suite at once
+python3 tests/test_generator.py             # PIN generator, checksum, MAC
+python3 tests/test_scanner.py              # iw scan output parser
+python3 tests/test_engine.py               # attack engine: pixiewps, wpa_supplicant, brute-force
+python3 tests/test_utils.py                # utils: /proc, ip link, vulnerable list
+python3 tests/test_android.py             # android: cmd wifi / settings commands
+python3 tests/test_fullflow.py          # end-to-end: scan -> target pick -> WPS -> report
+python3 tests/test_integration.py          # full attack pipeline (PIN, retry, Pixie Dust, report)
+python3 tests/test_cli.py                 # CLI orchestration: kill/restore, iface up/down, loop
 ```
 
 ---
 
-## Предупреждение о безопасности исходников
+## Source security note
 
-Перед сборкой были изучены три проекта (см. CREDITS). **FARHAN-Shot-v2** распространяется
-с обфусцированным `main.py` (`exec(marshal.loads(...))`) — так нельзя запускать
-«из коробки». Однако код открыт под GPL-2.0, поэтому мы его **декомпилировали**
-(`marshal → zlib → base64`) и проверили: вредоносной логики нет, это форк OneShot.
-Из него в NShot взяты 52 статических WPS-PIN для конкретных моделей роутеров
-и объединённый список уязвимых устройств (≈1007 записей). Подробности — в CREDITS.
+Three projects were reviewed before building (see CREDITS). **FARHAN-Shot-v2** ships
+with an obfuscated `main.py` (`exec(marshal.loads(...))`) — not runnable "as is".
+The code, however, is open under GPL-2.0, so we **decompiled** it
+(`marshal → zlib → base64`) and verified it: no malicious logic, it is a OneShot fork.
+From it NShot takes 52 static WPS PINs for specific router models and a merged list
+of vulnerable devices (~1007 entries). Details in CREDITS.
 
-Лицензия NShot: [GPL-2.0](LICENSE).
+NShot license: [GPL-3.0](LICENSE).

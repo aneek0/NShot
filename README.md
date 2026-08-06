@@ -37,8 +37,12 @@
 
 ## Установка
 
-Требуются бинарники: `python3`, `wpa_supplicant`, `iw`, `ip` (iproute2), а для
-Pixie Dust — `pixiewps`. Всё, кроме pixiewps, нужно в любом режиме.
+Python-пакеты не требуются: NShot работает только на стандартной библиотеке
+Python 3.10+, никакие pip-зависимости ставить не нужно.
+
+Из обычных системных утилит нужны бинарники: `python3`, `wpa_supplicant`, `iw`,
+`ip` (iproute2), а для Pixie Dust — `pixiewps`. Всё, кроме pixiewps, требуется в
+любом режиме.
 
 ```bash
 # Debian / Ubuntu

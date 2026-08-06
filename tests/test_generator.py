@@ -53,9 +53,29 @@ def test_suggested_pins_valid():
             f'Алгоритм {ident}: контрольная сумма PIN {pin} неверна'
 
 
+def test_farhan_static_pins():
+    """Статик-PIN из FARHAN-Shot-v2: доступны и валидны."""
+    gen = WPSpin()
+    # MAC-специфичный PIN должен предлагаться для своего BSSID
+    pins = gen._getSuggested('90:F6:52:DE:23:1B')
+    ids = [p['id'] for p in pins]
+    assert 'pinTDW8960N_90F652DE231B' in ids, 'MAC-специфичный PIN не предложен для своего BSSID'
+    pin = gen._generate('pinTDW8960N_90F652DE231B', '90:F6:52:DE:23:1B')
+    assert len(str(pin)) == 8 and str(pin).isdigit(), f'PIN {pin} невалиден'
+    # Чужой MAC не должен получать TD-специфичные подсказки
+    ids_other = [p['id'] for p in gen._getSuggested('04:BF:6D:12:34:56')]
+    assert 'pinTDW8960N_90F652DE231B' not in ids_other, 'Чужой BSSID получил чужие PIN'
+    # Модельные статик-PIN доступны в общем списке
+    for ident in ['pinTLWR741N', 'pinNetgearDGN1000', 'pinSapidoRB1602', 'pinTalkTalk4E26D4']:
+        assert ident in gen.ALGOS, f'Отсутствует алгоритм {ident}'
+        p = gen._generate(ident, '90:F6:52:DE:23:1B')
+        assert len(str(p)) == 8 and str(p).isdigit(), f'PIN {p} для {ident} невалиден'
+
+
 if __name__ == '__main__':
     test_checksum()
     test_network_address()
     test_get_likely()
     test_suggested_pins_valid()
+    test_farhan_static_pins()
     print('Все тесты генератора PIN прошли ✅')

@@ -27,7 +27,8 @@ Full attribution in [CREDITS.md](CREDITS.md).
   MAC-specific PINs are suggested automatically by OUI
 - 📶 WiFi standard detection (WiFi 6/5) in the scanner table, Android fallback scan
   via `cmd wifi`/`dumpsys` when `iw` is unavailable
-- 🔘 WPS PBC and NULL PIN (`-N`)
+- 🔘 WPS PBC and NULL PIN (`-N`); automatic NULL PIN (`00000000`) fallback
+  when no specific PIN is found or selected
 - 🧹 Auto-kill of interfering processes (`--kill`) and restore (`--restore`)
 - 📊 Results saved to `reports/stored.{txt,csv,json}`
 - 🔎 Environment self-check (`--check`)
@@ -90,7 +91,7 @@ sudo python3 nshot.py -i wlan0 --pbc                             # PBC
 | `-i, --interface` | Wi-Fi interface (e.g. `wlan0`) |
 | `-b, --bssid` | Target access point |
 | `-p, --pin` | Your PIN (string or 4/8 digits) |
-| `-N, --null-pin` | Try the null PIN |
+| `-N, --null-pin` | Force the null PIN (`00000000`); without it the null PIN is still tried automatically when no PIN is found or selected |
 | `-P, --pixie-dust` | Pixie Dust attack |
 | `-B, --bruteforce` | Online brute-force |
 | `--pbc` | Push-button connection |

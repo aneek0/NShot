@@ -14,6 +14,7 @@ TESTS = [
     'test_scanner.py',     # парсер вывода iw scan
     'test_engine.py',      # движок атак: pixiewps, wpa_supplicant, брутфорс
     'test_integration.py', # полный конвейер атаки (PIN, retry, Pixie Dust, отчёт)
+    'test_cli.py',         # оркестрация CLI: kill/restore, iface up/down, loop
 ]
 
 

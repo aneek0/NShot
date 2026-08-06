@@ -7,6 +7,7 @@
 
 import sys
 import os
+import time
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -135,10 +136,55 @@ def test_bruteforce_initializes_with_injected_args():
         bf.CONNECTION._cleanup()
 
 
+def test_reusable_objects_created_once():
+    """WPSpin/WiFiCollector создаются один раз и переиспользуются между попытками."""
+    _mock_wpas_launch()
+    conn = conn_mod.Initialize('wlan0', TEST_ARGS)
+    try:
+        assert conn.GENERATOR is not None and conn.COLLECTOR is not None
+        import src.wps.connection as c
+        calls = []
+        orig_gen = c.src.wps.generator.WPSpin
+        orig_col = c.src.wifi.collector.WiFiCollector
+        c.src.wps.generator.WPSpin = lambda: calls.append(1) or orig_gen()
+        c.src.wifi.collector.WiFiCollector = lambda: calls.append(2) or orig_col()
+        try:
+            conn.singleConnection('AA:BB:CC:DD:EE:FF', '12345670')
+        except Exception:
+            pass  # fake-поток не даёт полного успеха — проверяем только создание объектов
+        finally:
+            c.src.wps.generator.WPSpin = orig_gen
+            c.src.wifi.collector.WiFiCollector = orig_col
+        assert calls == [], f'не должно создаваться новых генераторов/коллекторов, было {calls}'
+    finally:
+        conn._cleanup()
+
+
+def test_drain_wpas_non_blocking_with_pipe():
+    """_drainWpas сбрасывает накопленный вывод через select, не блокируясь."""
+    _mock_wpas_launch()
+    conn = conn_mod.Initialize('wlan0', TEST_ARGS)
+    try:
+        r, w = os.pipe()
+        with os.fdopen(w, 'w', encoding='utf-8') as fw:
+            fw.write('WPS: Building Message M1\n' * 5)
+            fw.flush()
+            with os.fdopen(r, 'r', encoding='utf-8') as fr:
+                conn.WPAS.stdout = fr
+                start = time.monotonic()
+                conn._drainWpas()
+                elapsed = time.monotonic() - start
+                assert elapsed < 0.5, f'_drainWpas заблокировался на {elapsed:.2f}s'
+    finally:
+        conn._cleanup()
+
+
 if __name__ == '__main__':
     test_pixiewps_command_build()
     test_pixiewps_run_parsing()
     test_pixiewps_empty_pin()
     test_connection_initializes_with_injected_args()
     test_bruteforce_initializes_with_injected_args()
+    test_reusable_objects_created_once()
+    test_drain_wpas_non_blocking_with_pipe()
     print('Все тесты движка атак прошли ✅')

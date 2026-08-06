@@ -18,6 +18,7 @@ import subprocess
 import time
 import shutil
 import codecs
+import select
 
 import src.wps.pixiewps
 import src.wps.generator
@@ -55,6 +56,11 @@ class Initialize:
 
         self.CONNECTION_STATUS = ConnectionStatus()
         self.PIXIE_CREDS  = src.wps.pixiewps.Data()
+
+        # Переиспользуемые объекты: создаются один раз, а не на каждую попытку
+        # PIN (singleConnection вызывается в горячем цикле брутфорса).
+        self.GENERATOR = src.wps.generator.WPSpin()
+        self.COLLECTOR = src.wifi.collector.WiFiCollector()
 
         self.TEMPDIR = tempfile.mkdtemp()
 
@@ -104,8 +110,8 @@ class Initialize:
         """
 
         pixiewps_dir = src.utils.PIXIEWPS_DIR
-        generator    = src.wps.generator.WPSpin()
-        collector    = src.wifi.collector.WiFiCollector()
+        generator    = self.GENERATOR
+        collector    = self.COLLECTOR
 
         # Handle null pin attack
         if self.ARGS.null_pin:
@@ -214,6 +220,33 @@ class Initialize:
         """Sends command to wpa_supplicant without reply"""
 
         self.RETSOCK.sendto(command.encode(), self.WPAS_CTRL_PATH)
+
+    def _drainWpas(self):
+        """Non-blocking drain of pending wpa_supplicant output between attempts.
+
+        Replaces a blocking `stdout.read(300)` that could stall the hot loop
+        between PIN attempts (and hang if wpa_supplicant goes quiet after
+        WPS_CANCEL). Uses select() so we only consume bytes already buffered.
+        """
+        wpas = getattr(self, 'WPAS', None)
+        if wpas is None:
+            return
+        stream = getattr(wpas, 'stdout', None)
+        if stream is None:
+            return
+        if getattr(stream, 'fileno', None) is None:
+            # Fake stream (tests): keep the old behaviour — one non-blocking read.
+            try:
+                stream.read(300)
+            except (OSError, ValueError, TypeError):
+                pass
+            return
+        try:
+            while select.select([stream], [], [], 0)[0]:
+                if not stream.readline():
+                    break
+        except (OSError, ValueError, TypeError):
+            pass
 
     def _handleWpas(self, pbc_mode: bool = False) -> bool:
         """Handles WPA supplicant output and updates connection status"""
@@ -380,7 +413,7 @@ class Initialize:
         while True:
             self.PIXIE_CREDS.clear()
             self.CONNECTION_STATUS.clear()
-            self.WPAS.stdout.read(300) # Clean the pipe
+            self._drainWpas()
 
             wps_start_time = time.time()
 

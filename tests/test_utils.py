@@ -62,12 +62,38 @@ def test_ignores_netlink_processes_that_do_not_hold_socket():
     assert result == [], result
 
 
+def test_iface_flags_up_fast_path():
+    """_ifaceFlagsUp читает IFF_UP из sysfs без subprocess."""
+    def fake_open(file, *a, **k):
+        if isinstance(file, str) and file == '/sys/class/net/wlan0/flags':
+            return io.StringIO('0x1003')  # содержит IFF_UP (0x1)
+        raise FileNotFoundError(file)
+
+    with mock.patch('builtins.open', side_effect=fake_open):
+        assert u._ifaceFlagsUp('wlan0') is True
+
+    def fake_open_down(file, *a, **k):
+        if isinstance(file, str) and file == '/sys/class/net/wlan0/flags':
+            return io.StringIO('0x1002')  # IFF_UP выключен
+        raise FileNotFoundError(file)
+
+    with mock.patch('builtins.open', side_effect=fake_open_down):
+        assert u._ifaceFlagsUp('wlan0') is False
+
+    # Файла нет / недоступен -> None (фолбэк на ip link show)
+    with mock.patch('builtins.open', side_effect=FileNotFoundError):
+        assert u._ifaceFlagsUp('wlan0') is None
+
+
 def test_is_interface_up():
-    """isInterfaceUp зависит от наличия 'UP' в выводе ip link show."""
+    """isInterfaceUp зависит от наличия 'UP' в выводе ip link show (fallback)."""
     class FakeOut:
         def __init__(self, stdout, returncode=0):
             self.stdout = stdout
             self.returncode = returncode
+
+    # Принудительно используем fallback: sysfs-файла нет
+    u._ifaceFlagsUp = lambda interface: None
 
     u.subprocess.run = lambda *a, **k: FakeOut('wlan0: <BROADCAST,MULTICAST,UP>')
     assert u.isInterfaceUp('wlan0') is True
@@ -77,6 +103,15 @@ def test_is_interface_up():
 
     u.subprocess.run = lambda *a, **k: FakeOut('', returncode=1)
     assert u.isInterfaceUp('wlan0') is False
+
+
+def test_is_interface_up_fast_path_skips_subprocess():
+    """Если sysfs отвечает, subprocess (ip link) вообще не запускается."""
+    u._ifaceFlagsUp = lambda interface: True
+    subprocess_was_called = []
+    u.subprocess.run = lambda *a, **k: subprocess_was_called.append(a)
+    assert u.isInterfaceUp('wlan0') is True
+    assert subprocess_was_called == [], 'не должен вызываться ip при быстром ответе'
 
 
 def test_iface_ctl_builds_command():
@@ -185,7 +220,9 @@ def test_restore_processes_no_file_is_noop():
 if __name__ == '__main__':
     test_get_interfering_processes()
     test_ignores_netlink_processes_that_do_not_hold_socket()
+    test_iface_flags_up_fast_path()
     test_is_interface_up()
+    test_is_interface_up_fast_path_skips_subprocess()
     test_iface_ctl_builds_command()
     test_add_vulnerable_ap_appends_and_dedups()
     test_kill_interfering_kills_and_saves()

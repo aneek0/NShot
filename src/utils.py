@@ -187,14 +187,35 @@ def ifaceCtl(interface: str, action: str):
 
     return command_output.returncode
 
+def _ifaceFlagsUp(interface: str) -> bool | None:
+    """Cheap UP-state check via sysfs (no subprocess). None if not available.
+
+    Reads /sys/class/net/<iface>/flags; bit 0x1 is IFF_UP — the same state
+    `ip link show` reports as "UP". A sysfs read is microseconds vs ~10-30ms
+    to spawn `ip`, and isInterfaceUp is called on every WPS PIN attempt and
+    every wpa_supplicant output line, so this measurably speeds up bruteforce.
+    """
+    try:
+        with open(f'/sys/class/net/{interface}/flags', 'r', encoding='ascii') as f:
+            return bool(int(f.read().strip(), 16) & 0x1)
+    except (OSError, ValueError):
+        return None
+
 def isInterfaceUp(interface: str) -> bool:
-    """Check if the network interface is still up."""
+    """Check if the network interface is still up.
+
+    Fast sysfs path (microseconds) with the old `ip link show` fallback when
+    sysfs is unavailable (some Android/Termux setups, tests, sandboxes).
+    """
+    quick = _ifaceFlagsUp(interface)
+    if quick is not None:
+        return quick
 
     try:
         command = ['ip', 'link', 'show', interface]
         output = subprocess.run(command,
             encoding='utf-8', stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, timeout=5
+            stderr=subprocess.PIPE, timeout=2
         )
 
         if output.returncode != 0:

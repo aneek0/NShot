@@ -136,6 +136,7 @@ python3 tests/run_all.py                     # весь набор сразу
 python3 tests/test_generator.py             # генератор PIN, контрольная сумма, MAC
 python3 tests/test_scanner.py              # парсер вывода iw scan
 python3 tests/test_engine.py               # движок атак: pixiewps, wpa_supplicant, брутфорс
+python3 tests/test_utils.py                # utils: /proc, ip link, список уязвимых
 python3 tests/test_integration.py          # полный конвейер атаки (PIN, retry, Pixie Dust, отчёт)
 python3 tests/test_cli.py                 # оркестрация CLI: kill/restore, iface up/down, loop
 ```

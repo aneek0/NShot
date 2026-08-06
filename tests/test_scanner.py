@@ -38,6 +38,29 @@ class FakeResult:
         self.stdout = stdout
 
 
+def test_prompt_network_selects_target():
+    """Интерактивный выбор цели: ввод '1' -> (BSSID, network_info)."""
+    import builtins
+    scanner_mod.subprocess.run = lambda *a, **k: FakeResult(SAMPLE)
+
+    real_input = builtins.input
+    builtins.input = lambda prompt='': '1'
+    try:
+        s = scanner_mod.WiFiScanner('wlan0', vuln_list=None, args=TEST_ARGS)
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            result = s.promptNetwork()
+    finally:
+        builtins.input = real_input
+
+    assert result is not None
+    bssid, info = result
+    assert bssid == '00:11:22:33:44:55', bssid
+    assert info['ESSID'] == 'TestNet', info['ESSID']
+
+
 def test_iw_scanner_parses_wps_network():
     scanner_mod.subprocess.run = lambda *a, **k: FakeResult(SAMPLE)
     s = scanner_mod.WiFiScanner('wlan0', vuln_list=None, args=TEST_ARGS)
@@ -62,5 +85,6 @@ def test_iw_scanner_parses_wps_network():
 
 
 if __name__ == '__main__':
+    test_prompt_network_selects_target()
     test_iw_scanner_parses_wps_network()
     print('Тесты сканера прошли ✅')

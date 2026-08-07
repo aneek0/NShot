@@ -279,23 +279,21 @@ def clearScreen():
         sys.stdout.write('\033[H\033[2J')
         sys.stdout.flush()
 
-def waitForInterfaceUp(interface: str, timeout: float = 20.0, poll: float = 0.2,
-                       settle: float = 1.0) -> bool:
+def waitForInterfaceUp(interface: str, timeout: float = 20.0, poll: float = 0.2) -> bool:
     """Wait until the interface reports UP, so wpa_supplicant can come up.
 
     On some platforms the interface/radio is enabled asynchronously; running
     the scan or wpa_supplicant too early produces "Network is down (-100)".
-    A bare "UP" flag is not enough: wpa_supplicant must also finish its own
-    (re)initialization, so once the interface is observed up, keep waiting an
-    extra `settle` seconds before returning.
-    If the interface state cannot be determined (no sysfs, no `ip`, or the
-    check fails), this behaves as a no-op and returns immediately.
+    Note that "UP" here only means the *interface* flag is set - the driver
+    may still be bringing up the radio, which is why callers should also
+    retry the actual operation (see WiFiScanner). If the interface state
+    cannot be determined (no sysfs, no `ip`, or the check fails), this
+    behaves as a no-op and returns immediately.
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             if isInterfaceUp(interface):
-                time.sleep(settle)
                 return True
         except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
             # Cannot determine the state - do not block.

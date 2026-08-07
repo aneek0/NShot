@@ -6,6 +6,7 @@ import re
 import csv
 import codecs
 import subprocess
+import time
 
 from src import logger
 from src.utils import REPORTS_DIR
@@ -197,18 +198,37 @@ class WiFiScanner:
             re.compile(r' [*] Device name: (.*)'): handleDeviceName
         }
 
-        # Wait until the interface is really up: otherwise iw/wpa_supplicant
-        # fail with "Network is down (-100)" (the radio comes up async).
+        # Wait for the interface flag to be UP. This is a fast-path guard, but
+        # a bare "UP" flag is not enough: the driver may still be bringing the
+        # radio up asynchronously and iw will fail with "Network is down (-100)".
+        # Rather than blind-sleeping, we retry the scan a few times below, which
+        # adapts to how fast the hardware actually becomes usable.
         src.utils.waitForInterfaceUp(self.INTERFACE)
 
         command = ['iw', 'dev', f'{self.INTERFACE}', 'scan']
-        try:
-            iw_scan_process = subprocess.run(command,
-                encoding='utf-8', stdout=subprocess.PIPE, stderr=subprocess.STDOUT
-            )
-        except (subprocess.CalledProcessError, FileNotFoundError) as error:
-            logger.error(f'Failed to perform an iw scan: \n {error}')
-            return
+
+        # Retry up to MAX_SCAN_ATTEMPTS times so a transient "radio not ready
+        # yet" error does not abort the scan right after Wi-Fi is re-enabled.
+        scan_attempts = 0
+        max_scan_attempts = 3
+        iw_scan_process = None
+        while scan_attempts < max_scan_attempts:
+            scan_attempts += 1
+            try:
+                iw_scan_process = subprocess.run(command,
+                    encoding='utf-8', stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+                )
+            except (subprocess.CalledProcessError, FileNotFoundError) as error:
+                logger.error(f'Failed to perform an iw scan: \n {error}')
+                return
+
+            stdout = iw_scan_process.stdout or ''
+            returncode = getattr(iw_scan_process, 'returncode', 0)
+            failed = 'command failed' in stdout or returncode != 0
+            if failed and scan_attempts < max_scan_attempts:
+                time.sleep(1.0)
+                continue
+            break
 
         lines = iw_scan_process.stdout.splitlines()
 

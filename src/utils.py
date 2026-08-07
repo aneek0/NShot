@@ -280,7 +280,7 @@ def clearScreen():
         sys.stdout.flush()
 
 def waitForInterfaceUp(interface: str, timeout: float = 20.0, poll: float = 0.2,
-                       settle: float = 2.5) -> bool:
+                       settle: float = 1.0) -> bool:
     """Wait until the interface reports UP, so wpa_supplicant can come up.
 
     On some platforms the interface/radio is enabled asynchronously; running

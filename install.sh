@@ -2,8 +2,9 @@
 # NShot auto-installer (Debian/Ubuntu, Arch, Fedora, Termux).
 # - Run inside the repo (sudo ./install.sh): installs dependencies and
 #   updates the repo (git pull).
-# - Run from outside (curl ... | bash): installs dependencies, clones NShot
-#   into ./NShot and shows the run commands.
+# - Run from outside (curl ... | bash): installs dependencies and clones NShot
+#   into ./NShot. If an NShot folder already exists, it is updated instead of
+#   cloned, then the run commands are shown.
 # Run as root: sudo ./install.sh
 
 set -e
@@ -24,6 +25,32 @@ if [ -f "nshot.py" ] && [ -f "LICENSE" ]; then
     IN_REPO=true
 fi
 
+# Fetch or update the repo. When we are outside the repo but an NShot folder
+# already exists, update it (git pull) instead of cloning, since `git clone`
+# would fail into a non-empty directory.
+do_clone_or_update() {
+    if [ "$IN_REPO" = true ]; then
+        echo "==> Updating NShot..."
+        git pull
+    elif [ -d "$REPO_DIR/.git" ]; then
+        echo "==> Updating existing NShot folder..."
+        (cd "$REPO_DIR" && git pull)
+    else
+        echo "==> Cloning NShot..."
+        git clone "$REPO_URL" "$REPO_DIR"
+    fi
+}
+
+# Command path depends only on whether we are inside the repo, not on whether
+# we cloned or updated an existing folder.
+nshot_command() {
+    if [ "$IN_REPO" = true ]; then
+        echo "sudo python3 nshot.py"
+    else
+        echo "sudo python3 NShot/nshot.py"
+    fi
+}
+
 # Logo - only on the first run (outside the repo)
 if [ "$IN_REPO" = false ]; then
     echo "$LOGO"
@@ -38,13 +65,7 @@ if [ -n "$PREFIX" ] && [ "${PREFIX#/data/data/com.termux}" != "$PREFIX" ]; then
     pkg upgrade -y
     pkg i root-repo
     pkg i -y sudo python wpa-supplicant pixiewps iw openssl git
-    if [ "$IN_REPO" = false ]; then
-        echo "==> Cloning NShot..."
-        git clone "$REPO_URL" "$REPO_DIR"
-    else
-        echo "==> Updating NShot..."
-        git pull
-    fi
+    do_clone_or_update
     echo
     echo "==> Done! Test commands (replace wlan0 with your interface):"
     if [ "$IN_REPO" = true ]; then
@@ -76,16 +97,9 @@ else
     echo "    Install manually: python3, wpa_supplicant, iw, iproute2, pixiewps, git"
 fi
 
-# --- clone when run outside, update when run inside ---
-if [ "$IN_REPO" = true ]; then
-    echo "==> Updating NShot..."
-    git pull
-    NSHOT_CMD="sudo python3 nshot.py"
-else
-    echo "==> Cloning NShot..."
-    git clone "$REPO_URL" "$REPO_DIR"
-    NSHOT_CMD="sudo python3 NShot/nshot.py"
-fi
+# --- clone, or update when inside the repo or an NShot folder already exists ---
+do_clone_or_update
+NSHOT_CMD="$(nshot_command)"
 
 echo
 echo "==> Environment check:"

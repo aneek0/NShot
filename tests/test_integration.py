@@ -89,11 +89,14 @@ class FakeProcess:
         return 0
 
 
-def _setup(stream_lines, **args_overrides):
+def _setup(stream_lines, reports_dir=None, **args_overrides):
     """Creates a connection.Initialize with a replaced wpa_supplicant."""
     conn_mod.subprocess.Popen = FakeProcess
     conn_mod.os.path.exists = lambda p: True
     utils_mod.isInterfaceUp = lambda interface: True
+    # Self-contained reports dir so successful connections can write reports
+    # without depending on state left by other tests.
+    utils_mod.REPORTS_DIR = (reports_dir or tempfile.mkdtemp()) + os.sep
 
     args = make_args(**args_overrides)
     conn = conn_mod.Initialize('wlan0', args)
@@ -105,15 +108,13 @@ def _setup(stream_lines, **args_overrides):
 def test_pin_attack_success_writes_report():
     """Full success: PIN -> GOT_PSK -> report in reports/."""
     tmpdir = tempfile.mkdtemp()
-    utils_mod.REPORTS_DIR = tmpdir + os.sep
-
     lines = [
         "WPS: Building Message M1",
         "WPS: Received M1",
         "wlan0: Trying to associate with 'TestNet' SSID: " + BSSID,
         f"WPS: Network Key (hexdump)(32): {PSK_HEX}",
     ]
-    conn, _ = _setup(lines)
+    conn, _ = _setup(lines, reports_dir=tmpdir)
 
     try:
         result = conn.singleConnection(BSSID, PIN)

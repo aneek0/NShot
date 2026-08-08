@@ -135,6 +135,34 @@ def test_iface_ctl_builds_command():
     assert captured[0] == ['ip', 'link', 'set', 'wlan0', 'up'], captured
 
 
+def test_ensure_interface_up_fast_path_when_already_up():
+    """If the interface is already UP, ensureInterfaceUp returns without touching it."""
+    with mock.patch.object(u, 'isInterfaceUp', return_value=True), \
+         mock.patch.object(u, 'ifaceCtl', side_effect=AssertionError('should not be called')) as ctl:
+        assert u.ensureInterfaceUp('wlan0', timeout=1.0) is True
+    ctl.assert_not_called()
+
+
+def test_ensure_interface_up_reraises_after_drop():
+    """A drop right after raising (async teardown) is caught and re-raised."""
+    # down -> up -> down (async drop) -> down again -> up -> stays up
+    states = iter([False, True, False, False, True, True, True, True, True, True])
+    with mock.patch.object(u, 'isInterfaceUp', side_effect=lambda _iface: next(states)), \
+         mock.patch.object(u, 'ifaceCtl') as ctl:
+        result = u.ensureInterfaceUp('wlan0', timeout=5.0, poll=0.01, stability=0.05)
+    assert result is True
+    assert ctl.call_count == 2, f'expected 2 raises, got {ctl.call_count}'
+
+
+def test_ensure_interface_up_timeout_returns_false():
+    """An interface that never comes up returns False after the timeout."""
+    with mock.patch.object(u, 'isInterfaceUp', return_value=False), \
+         mock.patch.object(u, 'ifaceCtl') as ctl:
+        result = u.ensureInterfaceUp('wlan0', timeout=0.05, poll=0.01)
+    assert result is False
+    assert ctl.call_count >= 1
+
+
 def test_add_vulnerable_ap_appends_and_dedups():
     """addVulnerableAP appends vulnerable models and does not duplicate."""
     tmp = tempfile.mktemp()

@@ -37,6 +37,11 @@ def _patch_main_deps():
     def fake_restore():
         calls['restore'] += 1
 
+    def fake_ensure_up(interface):
+        # New interface bring-up path: record it as the "up" action.
+        calls[f'iface_ups'].append(interface)
+        return True  # success
+
     def fake_iface_ctl(interface, action):
         calls[f'iface_{action}s'].append(interface)
         return False  # success
@@ -44,6 +49,7 @@ def _patch_main_deps():
     nshot.handleConnection = fake_handle_connection
     nshot.src.utils.killInterfering = fake_kill
     nshot.src.utils.restoreProcesses = fake_restore
+    nshot.src.utils.ensureInterfaceUp = fake_ensure_up
     nshot.src.utils.ifaceCtl = fake_iface_ctl
     nshot.src.utils.checkRunningProcesses = lambda interface: None
     nshot.src.utils.isAndroid = lambda: False

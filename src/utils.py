@@ -301,6 +301,52 @@ def waitForInterfaceUp(interface: str, timeout: float = 20.0, poll: float = 0.2)
         time.sleep(poll)
     return isInterfaceUp(interface)
 
+def ensureInterfaceUp(interface: str, timeout: float = 20.0, poll: float = 0.2,
+                      stability: float = 1.0) -> bool:
+    """Bring the interface up and keep it up.
+
+    `ip link set <iface> up` returns as soon as the kernel accepts the
+    request, but the interface can drop again moments later: on Android the
+    Wi-Fi teardown after `cmd wifi set-wifi-enabled disabled` runs
+    asynchronously and can pull the interface down right after we raised it
+    (this is the "interface dies right after the script starts" symptom).
+    Some drivers are also slow to finish bring-up.
+
+    This keeps re-raising the interface until it reports UP and stays UP for
+    a short `stability` window. If the interface is already UP when called,
+    it is returned immediately (no added latency for the healthy case).
+    """
+    deadline = time.time() + timeout
+    raised = False
+    while time.time() < deadline:
+        if not isInterfaceUp(interface):
+            raised = True
+            try:
+                ifaceCtl(interface, action='up')
+            except Exception:
+                pass
+            time.sleep(poll)
+            continue
+
+        if not raised:
+            # Already up before we were called: nothing to fix, fast path.
+            return True
+
+        # We raised it ourselves: require a short stability window so an
+        # async drop (Android teardown, slow driver) is caught and re-raised.
+        stable_until = time.time() + stability
+        stable = True
+        while time.time() < stable_until:
+            if not isInterfaceUp(interface):
+                stable = False
+                break
+            time.sleep(poll)
+        if stable:
+            return True
+        # Dropped again: loop around and raise it again.
+        raised = True
+    return isInterfaceUp(interface)
+
 def die(text: str):
     """Print an error and exit with non-zero exit code."""
 

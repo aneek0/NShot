@@ -6,7 +6,6 @@ import re
 import csv
 import codecs
 import subprocess
-import time
 
 from src import logger
 from src.utils import REPORTS_DIR
@@ -201,8 +200,8 @@ class WiFiScanner:
         # Wait for the interface flag to be UP. This is a fast-path guard, but
         # a bare "UP" flag is not enough: the driver may still be bringing the
         # radio up asynchronously and iw will fail with "Network is down (-100)".
-        # Rather than blind-sleeping, we retry the scan a few times below, which
-        # adapts to how fast the hardware actually becomes usable.
+        # Rather than blind-sleeping, we retry the scan a few times below, and
+        # before each retry we re-raise the interface in case it dropped again.
         src.utils.waitForInterfaceUp(self.INTERFACE)
 
         command = ['iw', 'dev', f'{self.INTERFACE}', 'scan']
@@ -226,7 +225,10 @@ class WiFiScanner:
             returncode = getattr(iw_scan_process, 'returncode', 0)
             failed = 'command failed' in stdout or returncode != 0
             if failed and scan_attempts < max_scan_attempts:
-                time.sleep(1.0)
+                # The interface may have dropped again (async teardown after
+                # Wi-Fi was disabled). Re-raise it and wait for it to stay up
+                # before trying the scan again.
+                src.utils.ensureInterfaceUp(self.INTERFACE, timeout=5.0)
                 continue
             break
 

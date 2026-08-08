@@ -240,7 +240,12 @@ def main():
                 wmt_wifi_device = Path('/dev/wmtWifi')
                 setupMediatekWifi(wmt_wifi_device)
 
-            if src.utils.ifaceCtl(args.interface, action='up'):
+            # Bring the interface up and keep it up: a single `ip link set up`
+            # is not enough on Android right after Wi-Fi was disabled - the
+            # framework tears the interface down asynchronously and it can
+            # drop again right after we raised it. ensureInterfaceUp re-raises
+            # until the interface stays UP.
+            if not src.utils.ensureInterfaceUp(args.interface):
                 src.utils.die(f'Failed to bring interface \'{args.interface}\' up')
 
             handleConnection(args)

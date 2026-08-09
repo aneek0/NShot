@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # NShot auto-installer (Debian/Ubuntu, Arch, Fedora, Termux).
-# - Run inside the repo (sudo ./install.sh): installs dependencies and
-#   updates the repo (git pull).
-# - Run from outside (curl ... | bash): installs dependencies and clones NShot
-#   into ./NShot. If an NShot folder already exists, it is updated instead of
-#   cloned, then the run commands are shown.
+# - First install (no NShot folder yet): updates packages and installs the
+#   dependencies, then clones NShot.
+# - Re-run (NShot folder or repo already exists): only updates the NShot
+#   folder (git pull), installed packages are left untouched.
 # Run as root: sudo ./install.sh
 
 set -e
@@ -23,6 +22,16 @@ LOGO='  ███╗   ██╗███████╗██╗  ██╗ █
 IN_REPO=false
 if [ -f "nshot.py" ] && [ -f "LICENSE" ]; then
     IN_REPO=true
+fi
+
+# Fresh install (no checkout yet: needs the repo cloned and system packages
+# set up) vs an update of an existing checkout (only git pull, packages are
+# left alone). Detected up-front so the package step can be skipped on re-runs.
+FIRST_INSTALL=false
+if [ "$IN_REPO" = true ] || [ -d "$REPO_DIR/.git" ]; then
+    FIRST_INSTALL=false
+else
+    FIRST_INSTALL=true
 fi
 
 # Fetch or update the repo. When we are outside the repo but an NShot folder
@@ -56,15 +65,18 @@ if [ "$IN_REPO" = false ]; then
     echo "$LOGO"
 fi
 
-echo "==> NShot: installing dependencies"
-
 # --- Termux ---
 if [ -n "$PREFIX" ] && [ "${PREFIX#/data/data/com.termux}" != "$PREFIX" ]; then
     echo "==> Termux detected"
-    pkg update -y
-    pkg upgrade -y
-    pkg i root-repo
-    pkg i -y sudo python wpa-supplicant pixiewps iw openssl git
+    if [ "$FIRST_INSTALL" = true ]; then
+        echo "==> First install: updating packages and installing dependencies..."
+        pkg update -y
+        pkg upgrade -y
+        pkg i root-repo
+        pkg i -y sudo python wpa-supplicant pixiewps iw openssl git
+    else
+        echo "==> Existing installation: updating NShot only (packages are not touched)"
+    fi
     do_clone_or_update
     echo
     echo "==> Done! Test commands (replace wlan0 with your interface):"
@@ -80,21 +92,28 @@ if [ -n "$PREFIX" ] && [ "${PREFIX#/data/data/com.termux}" != "$PREFIX" ]; then
     exit 0
 fi
 
-# --- git: needed for cloning/updating, always installed ---
-if command -v apt-get >/dev/null 2>&1; then
-    echo "==> apt detected (Debian/Ubuntu)"
-    apt update
-    apt upgrade
-    apt install -y python3 wpasupplicant iw iproute2 pixiewps git
-elif command -v pacman >/dev/null 2>&1; then
-    echo "==> pacman detected (Arch)"
-    pacman -Sy --noconfirm python wpa_supplicant iw iproute2 pixiewps git
-elif command -v dnf >/dev/null 2>&1; then
-    echo "==> dnf detected (Fedora)"
-    dnf install -y python3 wpa_supplicant iw iproute pixiewps git
+# --- package setup: only on the first install ---
+if [ "$FIRST_INSTALL" = true ]; then
+    echo "==> NShot: installing dependencies"
+
+    # --- git: needed for cloning, always installed ---
+    if command -v apt-get >/dev/null 2>&1; then
+        echo "==> apt detected (Debian/Ubuntu)"
+        apt update
+        apt upgrade
+        apt install -y python3 wpasupplicant iw iproute2 pixiewps git
+    elif command -v pacman >/dev/null 2>&1; then
+        echo "==> pacman detected (Arch)"
+        pacman -Sy --noconfirm python wpa_supplicant iw iproute2 pixiewps git
+    elif command -v dnf >/dev/null 2>&1; then
+        echo "==> dnf detected (Fedora)"
+        dnf install -y python3 wpa_supplicant iw iproute pixiewps git
+    else
+        echo "==> Could not determine the package manager."
+        echo "    Install manually: python3, wpa_supplicant, iw, iproute2, pixiewps, git"
+    fi
 else
-    echo "==> Could not determine the package manager."
-    echo "    Install manually: python3, wpa_supplicant, iw, iproute2, pixiewps, git"
+    echo "==> Existing installation: updating NShot only (packages are not touched)"
 fi
 
 # --- clone, or update when inside the repo or an NShot folder already exists ---

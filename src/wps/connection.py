@@ -152,6 +152,15 @@ class Initialize:
                 except FileNotFoundError:
                     pass
             return True
+
+        # A WSC NACK means the AP actively rejected this registration
+        # transaction (wrong PIN or WPS locked): the exchange completed with a
+        # failure, so there is nothing left for Pixie Dust to salvage. End the
+        # attempt here instead of launching a pixiewps run that would only
+        # repeat the same dead end.
+        if self.CONNECTION_STATUS.STATUS == 'WSC_NACK':
+            return False
+
         if self.ARGS.pixie_dust:
             if self.PIXIE_CREDS.getAll():
                 pin = self.PIXIE_CREDS.runPixieWps(self.ARGS.show_pixie, self.ARGS.pixie_force)

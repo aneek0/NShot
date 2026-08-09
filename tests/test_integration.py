@@ -171,8 +171,8 @@ def test_locked_retries_then_succeeds():
         conn._cleanup()
 
 
-def test_pixie_dust_collects_data_and_uses_pin():
-    """Pixie Dust: collect data -> WSC_NACK -> pixiewps -> PIN -> success."""
+def test_pixie_dust_skipped_on_wsc_nack():
+    """WSC NACK ends the attempt: Pixie Dust is NOT launched on a NACK."""
     # Pixie Dust data in wpa_supplicant hexdump format
     def hx(nbytes):
         return 'AB' * nbytes
@@ -186,12 +186,10 @@ def test_pixie_dust_collects_data_and_uses_pin():
         f"WPS: DH own Public Key (hexdump)(192): {hx(192)}",
         f"WPS: DH peer Public Key (hexdump)(192): {hx(192)}",
         "WPS: Building Message M4",
-        "WPS: Received WSC_NACK",   # PIN from getLikely did not work -> go to pixiewps
-        "WPS: Building Message M1",
-        f"WPS: Network Key (hexdump)(32): {PSK_HEX}",  # retry with the pixiewps PIN
+        "WPS: Received WSC_NACK",   # the AP rejected the registration
     ]
 
-    # Mock the pixiewps launch
+    # Mock the pixiewps launch - it must NOT be called on a WSC NACK
     pixie_cmds = []
 
     def fake_pixie_run(cmd, **kwargs):
@@ -204,14 +202,9 @@ def test_pixie_dust_collects_data_and_uses_pin():
 
     try:
         result = conn.singleConnection(BSSID)
-        assert result is True, 'Pixie Dust path must end in success'
-        assert conn.CONNECTION_STATUS.WPA_PSK == PSK
-        assert pixie_cmds, 'pixiewps was not called'
-        cmd = pixie_cmds[0]
-        assert cmd[0] == 'pixiewps'
-        # The pixiewps PIN was used in the retry
-        wps_regs = [c for c in conn.RETSOCK.sent if c.startswith('WPS_REG')]
-        assert any(c.endswith(' 12345670') for c in wps_regs), wps_regs
+        assert result is False, 'a WSC NACK must end the attempt with False'
+        assert pixie_cmds == [], f'pixiewps must not run after WSC NACK, got: {pixie_cmds}'
+        assert conn.CONNECTION_STATUS.STATUS == 'WSC_NACK'
     finally:
         conn._cleanup()
 
@@ -312,7 +305,7 @@ if __name__ == '__main__':
     test_pin_attack_success_writes_report()
     test_wrong_pin_returns_false()
     test_locked_retries_then_succeeds()
-    test_pixie_dust_collects_data_and_uses_pin()
+    test_pixie_dust_skipped_on_wsc_nack()
     test_bruteforce_quick_success()
     test_bruteforce_abort_saves_session()
     test_null_pin_mode_uses_zero_pin()

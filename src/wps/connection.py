@@ -18,6 +18,7 @@ import src.wifi.collector
 import src.args
 
 from src import logger
+from src.wifi.android import AndroidNetwork
 
 class ConnectionStatus:
     """Stores WPS connection details and status."""
@@ -408,9 +409,33 @@ class Initialize:
             'unicode-escape'
         ).encode('latin1').decode('utf-8', errors='replace')
 
+    def _restartWpas(self):
+        """Terminate and re-launch wpa_supplicant.
+
+        Used after a WPS timeout or an interface drop, where the old
+        instance is no longer usable. The interface must already be up:
+        `_initWpaSupplicant` waits for the control socket to appear, and a
+        down interface would block it forever.
+        """
+        try:
+            self.WPAS.terminate()
+            self.WPAS.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            self.WPAS.kill()
+
+        self._initWpaSupplicant()
+
     def _wpsConnection(self, bssid: str = None, pin: str = None,
         pbc_mode: bool = False, retry_on_lock: bool = False) -> bool:
         """Handles WPS connection process"""
+
+        # On Android the framework can tear the radio down asynchronously in
+        # the middle of a WPS registration, which drops the interface while
+        # wpa_supplicant is mid-exchange. Rather than aborting on the first
+        # drop, recover the radio and retry the registration, bounded so a
+        # persistently dying interface still aborts with a clear error.
+        interface_drop_recoveries = 0
+        max_interface_drop_recoveries = 3
 
         while True:
             self.PIXIE_CREDS.clear()
@@ -442,6 +467,35 @@ class Initialize:
 
             while True:
                 if not src.utils.isInterfaceUp(self.INTERFACE):
+                    if interface_drop_recoveries < max_interface_drop_recoveries:
+                        interface_drop_recoveries += 1
+                        logger.warning(
+                            f'Interface {self.INTERFACE} dropped mid-attempt; '
+                            f'bringing it back up '
+                            f'({interface_drop_recoveries}/{max_interface_drop_recoveries})…'
+                        )
+                        # On Android the framework may have taken the radio
+                        # back: ask it to let go, then re-raise the interface
+                        # before restarting wpa_supplicant.
+                        if src.utils.isAndroid():
+                            AndroidNetwork().disableWifi(force_disable=True, whisper=True)
+                        if not src.utils.ensureInterfaceUp(self.INTERFACE, timeout=10.0):
+                            self.CONNECTION_STATUS.STATUS = 'WPS_FAIL'
+                            break
+
+                        self._restartWpas()
+                        time.sleep(1)  # Brief delay before retry
+
+                        # Resend the WPS command
+                        r = self._sendAndReceive(cmd)
+                        if 'OK' not in r:
+                            self.CONNECTION_STATUS.STATUS = 'WPS_FAIL'
+                            logger.error(self._explainWpasNotOkStatus(cmd, r))
+                            return False
+
+                        self.CONNECTION_STATUS.clear()
+                        continue
+
                     logger.error(f'Interface {self.INTERFACE} is no longer UP. Aborting connection attempt.')
                     self.CONNECTION_STATUS.STATUS = 'WPS_FAIL'
                     break
@@ -456,14 +510,8 @@ class Initialize:
 
                     logger.warning(f'Received WPS-timeout after {elapsed} seconds')
 
-                    try:
-                        self.WPAS.terminate()
-                        self.WPAS.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        self.WPAS.kill()
-
-                    self._initWpaSupplicant()
-                    time.sleep(1) # Brief delay before retry
+                    self._restartWpas()
+                    time.sleep(1)  # Brief delay before retry
 
                     # Resend the WPS command
                     r = self._sendAndReceive(cmd)

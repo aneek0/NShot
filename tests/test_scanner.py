@@ -210,6 +210,39 @@ def test_iw_scanner_falls_back_when_iw_missing():
     assert nets[1]['ESSID'] == 'TestNet', nets[1]['ESSID']
 
 
+def test_iw_scanner_retries_transient_empty_scan():
+    """A successful scan with zero networks (radio still settling) is retried."""
+    calls = []
+
+    def fake_run(cmd, *a, **k):
+        calls.append(cmd)
+        if len(calls) < 3:
+            return FakeResult('')   # transient empty result
+        return FakeResult(SAMPLE)
+
+    scanner_mod.subprocess.run = fake_run
+    nets, _ = _run_iw_scanner(calls)
+
+    assert nets, 'should retry after a transient empty scan'
+    assert len(calls) == 3, f'expected 3 scan attempts, got {len(calls)}'
+    assert nets[1]['ESSID'] == 'TestNet', nets[1]['ESSID']
+
+
+def test_iw_scanner_yields_false_on_persistent_empty_scan():
+    """An always-empty scan reports no WPS networks after bounded retries."""
+    calls = []
+
+    def fake_run(cmd, *a, **k):
+        calls.append(cmd)
+        return FakeResult('')
+
+    scanner_mod.subprocess.run = fake_run
+    result, _ = _run_iw_scanner(calls)
+
+    assert result is False, 'a persistently empty scan must fail'
+    assert len(calls) == 1 + 3, f'expected 1 scan + 3 empty retries, got {len(calls)}'
+
+
 if __name__ == '__main__':
     test_prompt_network_selects_target()
     test_iw_scanner_parses_wps_network()
@@ -219,4 +252,6 @@ if __name__ == '__main__':
     test_iw_scanner_times_out_instead_of_hanging()
     test_iw_scanner_yields_reason_on_persistent_busy()
     test_iw_scanner_falls_back_when_iw_missing()
+    test_iw_scanner_retries_transient_empty_scan()
+    test_iw_scanner_yields_false_on_persistent_empty_scan()
     print('Scanner tests passed ✅')

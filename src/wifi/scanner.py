@@ -22,6 +22,12 @@ LOGO = '''  ███╗   ██╗███████╗██╗  ██╗
   ██║ ╚████║███████║██║  ██║╚██████╔╝   ██║
   ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝    ╚═╝'''
 
+# A successful `iw scan` right after the radio was brought up can come back
+# with zero results while the driver/framework is still settling (on Android
+# the framework may still hold the radio). Retry that case a few times before
+# declaring that there are no WPS networks.
+MAX_EMPTY_SCAN_RETRIES = 3
+
 class WiFiScanner:
     """Handles parsing scan results and table."""
 
@@ -276,23 +282,59 @@ class WiFiScanner:
         else:
             lines = iw_scan_process.stdout.splitlines()
 
+        def parse_lines(raw_lines):
+            """Parse raw iw/framework scan output into WPS-capable networks."""
+            parsed = []
+            for line in raw_lines:
+                if line.startswith('command failed:'):
+                    logger.error(f'Error: {line}')
+                    break
+
+                line = line.strip('\t')
+
+                for regexp, handler in matchers.items():
+                    res = re.match(regexp, line)
+                    if res:
+                        handler(line, res, parsed)
+
+            # Filtering non-WPS networks
+            return list(filter(lambda x: bool(x['WPS']), parsed))
+
         if self.ARGS.verbose:
             print('\n'.join(lines))
 
-        for line in lines:
-            if line.startswith('command failed:'):
-                logger.error(f'Error: {line}')
-                break
+        networks = parse_lines(lines)
 
-            line = line.strip('\t')
+        # A successful scan that returns zero networks right after the radio
+        # was brought up is often transient: the driver/framework is still
+        # settling (and on Android the framework may still hold the radio), so
+        # the first scan can legitimately come back empty. Retry a few times
+        # with a short backoff before declaring "No WPS networks found".
+        if scan_succeeded and not networks:
+            for retry in range(1, MAX_EMPTY_SCAN_RETRIES + 1):
+                time.sleep(0.5 * retry)
+                src.utils.ensureInterfaceUp(self.INTERFACE, timeout=5.0)
+                if src.utils.isAndroid():
+                    AndroidNetwork().waitForWifiOff(timeout=4.0)
 
-            for regexp, handler in matchers.items():
-                res = re.match(regexp, line)
-                if res:
-                    handler(line, res, networks)
+                try:
+                    proc = subprocess.run(command,
+                        encoding='utf-8', stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT, timeout=scan_timeout)
+                except subprocess.TimeoutExpired:
+                    continue
+                except FileNotFoundError:
+                    break
+                except (subprocess.CalledProcessError, OSError):
+                    return
 
-        # Filtering non-WPS networks
-        networks = list(filter(lambda x: bool(x['WPS']), networks))
+                stdout = proc.stdout or ''
+                if 'command failed' in stdout or getattr(proc, 'returncode', 0) != 0:
+                    continue
+
+                networks = parse_lines(stdout.splitlines())
+                if networks:
+                    break
 
         if not networks:
             return False

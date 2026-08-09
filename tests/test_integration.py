@@ -209,6 +209,73 @@ def test_pixie_dust_skipped_on_wsc_nack():
         conn._cleanup()
 
 
+class ReplayStream:
+    """Fake wpa_supplicant stdout that re-serves lines after a restart."""
+    def __init__(self, lines):
+        self._lines = list(lines)
+        self._i = 0
+
+    def readline(self):
+        if self._i >= len(self._lines):
+            self._i = 0
+        line = self._lines[self._i]
+        self._i += 1
+        return line
+
+    def close(self):
+        pass
+
+
+def test_interface_drop_recovers_and_continues():
+    """A mid-attempt interface drop is recovered: the WPS attempt continues and succeeds."""
+    lines = [
+        "WPS: Building Message M1",
+        "WPS: Received M1",
+        f"WPS: Network Key (hexdump)(32): {PSK_HEX}",
+    ]
+
+    class ReplayProcess(FakeProcess):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.stdout = ReplayStream(lines)
+
+    conn, _ = _setup(lines)
+    conn_mod.subprocess.Popen = ReplayProcess
+
+    # The interface is DOWN at the first inner-loop check, then comes back and
+    # stays up for the rest of the exchange.
+    states = iter([False, True, True, True, True])
+    utils_mod.isInterfaceUp = lambda interface: next(states, True)
+    utils_mod.ensureInterfaceUp = lambda *a, **k: True
+    utils_mod.isAndroid = lambda: False
+
+    try:
+        result = conn.singleConnection(BSSID, PIN)
+        assert result is True, 'a recoverable interface drop must not abort the attempt'
+        wps_regs = [c for c in conn.RETSOCK.sent if c.startswith('WPS_REG')]
+        assert len(wps_regs) == 2, f'expected 2 WPS_REG attempts, got {len(wps_regs)}'
+    finally:
+        conn._cleanup()
+
+
+def test_interface_drop_recovery_is_bounded():
+    """A permanently dead interface aborts after the bounded recovery attempts."""
+    conn, _ = _setup([])
+
+    utils_mod.isInterfaceUp = lambda interface: False
+    utils_mod.ensureInterfaceUp = lambda *a, **k: True
+    utils_mod.isAndroid = lambda: False
+
+    try:
+        result = conn.singleConnection(BSSID, PIN)
+        assert result is False, 'an interface that never comes back must fail'
+        assert conn.CONNECTION_STATUS.STATUS == 'WPS_FAIL'
+        wps_regs = [c for c in conn.RETSOCK.sent if c.startswith('WPS_REG')]
+        assert len(wps_regs) == 4, f'expected 1 + 3 recovery resends, got {len(wps_regs)}'
+    finally:
+        conn._cleanup()
+
+
 def test_bruteforce_quick_success():
     """smartBruteforce with a 7-digit mask: one attempt -> M7 -> PIN found."""
     conn_mod.subprocess.Popen = FakeProcess

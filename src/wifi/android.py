@@ -44,17 +44,19 @@ class AndroidNetwork:
         wifi_disable_scanner_cmd = ['cmd', 'wifi', 'set-wifi-enabled', 'disabled']
         wifi_disable_always_scanning_cmd = ['cmd', '-w', 'wifi', 'set-scan-always-available', 'disabled']
 
-        # Disable Android Wi-Fi scanner
+        # Disable Android Wi-Fi scanner. A wedged framework can block the
+        # `cmd -w` (waiting) variant forever, which used to leave the script
+        # stuck before the logo even appeared - so every call gets a timeout.
         try:
-            subprocess.run(wifi_disable_scanner_cmd)
-        except subprocess.CalledProcessError:
+            subprocess.run(wifi_disable_scanner_cmd, timeout=5)
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             logger.info('[-] Failed to disable Wi-Fi scanner, skipping')
 
         # Always scanning for networks causes the interface to be occupied by android
         if self.ENABLED_SCANNING == 1 or force_disable is True:
             try:
-                subprocess.run(wifi_disable_always_scanning_cmd)
-            except subprocess.CalledProcessError:
+                subprocess.run(wifi_disable_always_scanning_cmd, timeout=5)
+            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 logger.info('[-] Failed to disable always-on Wi-Fi scanning, skipping')
 
         # Adaptive wait for the radio to be released instead of a fixed
@@ -88,6 +90,20 @@ class AndroidNetwork:
             time.sleep(poll)
         logger.info(f'[-] Wi-Fi did not report disabled within {timeout:.0f}s, continuing anyway')
 
+    def waitForWifiOff(self, timeout: float = 4.0, poll: float = 0.2):
+        """Wait until the framework reports the radio as off (public helper).
+
+        Used by the scan retry loop: `iw scan` fails with "Device or resource
+        busy (-16)" while the framework is still tearing the radio down, so
+        between retries we give it more time to actually release the device.
+        """
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._isWifiDisabled():
+                return True
+            time.sleep(poll)
+        return False
+
     def enableWifi(self, force_enable: bool = False, whisper: bool = False):
         """Enable Wi-Fi connectivity on Android."""
 
@@ -97,16 +113,16 @@ class AndroidNetwork:
         wifi_enable_scanner_cmd = ['cmd', 'wifi', 'set-wifi-enabled', 'enabled']
         wifi_enable_always_scanning_cmd = ['cmd', '-w', 'wifi', 'set-scan-always-available', 'enabled']
 
-        # Enable Android Wi-Fi scanner
+        # Enable Android Wi-Fi scanner (same timeout rationale as disableWifi)
         try:
-            subprocess.run(wifi_enable_scanner_cmd)
-        except subprocess.CalledProcessError:
+            subprocess.run(wifi_enable_scanner_cmd, timeout=5)
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             logger.info('[!] Failed to enable Wi-Fi scanner, skipping')
 
         if self.ENABLED_SCANNING == 1 or force_enable is True:
             try:
-                subprocess.run(wifi_enable_always_scanning_cmd)
-            except subprocess.CalledProcessError:
+                subprocess.run(wifi_enable_always_scanning_cmd, timeout=5)
+            except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 logger.info('[-] Failed to enable always-on Wi-Fi scanning, skipping')
 
     def universalWifiScan(self) -> str | None:
@@ -125,8 +141,8 @@ class AndroidNetwork:
         try:
             proc = subprocess.run(cmd, shell=True,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                encoding='utf-8', errors='replace')
+                encoding='utf-8', errors='replace', timeout=10)
             return proc.stdout if proc.stdout.strip() else None
-        except (subprocess.CalledProcessError, FileNotFoundError) as error:
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as error:
             logger.info(f'Android WiFi fetch failed: {error}')
             return None

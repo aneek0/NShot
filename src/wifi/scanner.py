@@ -6,6 +6,7 @@ import re
 import csv
 import codecs
 import subprocess
+import time
 
 from src import logger
 from src.utils import REPORTS_DIR
@@ -208,31 +209,72 @@ class WiFiScanner:
 
         # Retry up to MAX_SCAN_ATTEMPTS times so a transient "radio not ready
         # yet" error does not abort the scan right after Wi-Fi is re-enabled.
+        # Two failure modes are handled here:
+        #  - "Device or resource busy (-16)": the framework/driver still holds
+        #    the radio (async Android teardown, wpa_supplicant, another scan in
+        #    progress). An instant retry just hits the same EBUSY, so between
+        #    attempts we sleep with a growing backoff, keep the interface up,
+        #    and on Android give the framework time to report the radio as off.
+        #  - a wedged driver/framework can block `iw scan` forever; the timeout
+        #    guarantees the tool can never hang on the logo with no output.
+        max_scan_attempts = 4
+        scan_timeout = 15
         scan_attempts = 0
-        max_scan_attempts = 3
         iw_scan_process = None
+        iw_missing = False
+        scan_succeeded = False
+        last_error = None
         while scan_attempts < max_scan_attempts:
             scan_attempts += 1
             try:
                 iw_scan_process = subprocess.run(command,
-                    encoding='utf-8', stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+                    encoding='utf-8', stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, timeout=scan_timeout
                 )
-            except (subprocess.CalledProcessError, FileNotFoundError) as error:
+            except subprocess.TimeoutExpired:
+                iw_scan_process = None
+                last_error = f'timed out after {scan_timeout}s'
+            except FileNotFoundError:
+                # `iw` is not installed - the Android fallback below is the
+                # only remaining option.
+                iw_missing = True
+                break
+            except (subprocess.CalledProcessError, OSError) as error:
                 logger.error(f'Failed to perform an iw scan: \n {error}')
                 return
 
-            stdout = iw_scan_process.stdout or ''
-            returncode = getattr(iw_scan_process, 'returncode', 0)
-            failed = 'command failed' in stdout or returncode != 0
-            if failed and scan_attempts < max_scan_attempts:
-                # The interface may have dropped again (async teardown after
-                # Wi-Fi was disabled). Re-raise it and wait for it to stay up
-                # before trying the scan again.
-                src.utils.ensureInterfaceUp(self.INTERFACE, timeout=5.0)
-                continue
-            break
+            if iw_scan_process is not None:
+                stdout = iw_scan_process.stdout or ''
+                returncode = getattr(iw_scan_process, 'returncode', 0)
+                if 'command failed' not in stdout and returncode == 0:
+                    scan_succeeded = True
+                    break
+                last_error = (stdout.splitlines() or [f'exit code {returncode}'])[0]
 
-        lines = iw_scan_process.stdout.splitlines()
+            if scan_attempts >= max_scan_attempts:
+                break
+
+            # The radio is released asynchronously: wait a little (growing
+            # backoff), then make sure the interface is still up and, on
+            # Android, that the framework has actually let go of the radio.
+            time.sleep(min(0.5 * scan_attempts, 2.0))
+            src.utils.ensureInterfaceUp(self.INTERFACE, timeout=5.0)
+            if src.utils.isAndroid():
+                AndroidNetwork().waitForWifiOff(timeout=4.0)
+
+        if iw_missing:
+            # Android fallback: iw is missing - try cmd wifi / dumpsys
+            fallback = AndroidNetwork().universalWifiScan()
+            if not fallback:
+                return False
+            lines = fallback.splitlines()
+        elif not scan_succeeded:
+            # Every attempt failed or timed out: tell the user why instead of
+            # silently reporting "no WPS networks".
+            logger.error(f'iw scan failed: {last_error}')
+            return False
+        else:
+            lines = iw_scan_process.stdout.splitlines()
 
         if self.ARGS.verbose:
             print('\n'.join(lines))
@@ -240,11 +282,6 @@ class WiFiScanner:
         for line in lines:
             if line.startswith('command failed:'):
                 logger.error(f'Error: {line}')
-                # Android fallback: iw may be missing - try cmd wifi / dumpsys
-                fallback = AndroidNetwork().universalWifiScan()
-                if not fallback:
-                    return False
-                lines = fallback.splitlines()
                 break
 
             line = line.strip('\t')

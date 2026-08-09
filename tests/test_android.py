@@ -137,6 +137,49 @@ def test_wait_for_radio_release_falls_back_after_timeout():
     assert time.time() - start < 0.2, 'should exit immediately when disabled'
 
 
+def test_wait_for_wifi_off():
+    """waitForWifiOff: True when the radio is off, False after the timeout."""
+    android.time.sleep = lambda s: None
+
+    android.subprocess.run = lambda *a, **k: FakeOut('Wi-Fi is disabled')
+    assert android.AndroidNetwork().waitForWifiOff(timeout=1.0, poll=0.01) is True
+
+    android.subprocess.run = lambda *a, **k: FakeOut('Wi-Fi is enabled')
+    assert android.AndroidNetwork().waitForWifiOff(timeout=0.05, poll=0.01) is False
+
+
+def test_disable_enable_wifi_tolerates_wedged_framework():
+    """A wedged `cmd wifi` (raises TimeoutExpired) must not crash disable/enable."""
+    captured = []
+
+    def fake_run(cmd, *a, **k):
+        captured.append(cmd)
+        raise android.subprocess.TimeoutExpired(cmd, timeout=5)
+
+    android.subprocess.run = fake_run
+    android.time.sleep = lambda s: None
+
+    net = android.AndroidNetwork()
+    net.ENABLED_SCANNING = 1
+    net.disableWifi()  # must not raise
+    net.enableWifi()   # must not raise
+
+    set_cmds = [c for c in captured
+                if 'set-wifi-enabled' in c or 'set-scan-always-available' in c]
+    assert len(set_cmds) == 4, f'expected 4 set commands attempted, got: {set_cmds}'
+
+
+def test_universal_wifi_scan_timeout():
+    """A wedged dumpsys/cmd wifi must time out instead of hanging."""
+    android.src_utils.isAndroid = lambda: True
+
+    def fake_run(cmd, *a, **k):
+        raise android.subprocess.TimeoutExpired(cmd, timeout=10)
+
+    android.subprocess.run = fake_run
+    assert android.AndroidNetwork().universalWifiScan() is None
+
+
 if __name__ == '__main__':
     test_store_always_scan_state()
     test_disable_and_enable_wifi()
@@ -144,4 +187,7 @@ if __name__ == '__main__':
     test_universal_wifi_scan()
     test_wait_for_radio_release_returns_early_when_disabled()
     test_wait_for_radio_release_falls_back_after_timeout()
+    test_wait_for_wifi_off()
+    test_disable_enable_wifi_tolerates_wedged_framework()
+    test_universal_wifi_scan_timeout()
     print('Android tests passed ✅')

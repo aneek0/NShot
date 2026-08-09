@@ -127,9 +127,96 @@ def test_scanner_clears_screen_before_each_scan():
     assert len(clears) >= 2, f'expected at least 2 clears, got: {clears}'
 
 
+def _run_iw_scanner(calls):
+    """Run _iwScanner with all hardware/state helpers mocked (fast, isolated)."""
+    import io
+    from contextlib import redirect_stdout
+    scanner_mod.time.sleep = lambda s: None
+    scanner_mod.src.utils.ensureInterfaceUp = lambda *a, **k: True
+    scanner_mod.src.utils.isAndroid = lambda: False
+    scanner_mod.src.utils.clearScreen = lambda: None
+    # The real waitForInterfaceUp polls for up to 20s of wall time; with a
+    # mocked sleep it would spin through millions of instant iterations, so
+    # it must be mocked here too.
+    scanner_mod.src.utils.waitForInterfaceUp = lambda *a, **k: True
+    s = scanner_mod.WiFiScanner('wlan0', vuln_list=None, args=TEST_ARGS)
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        return s._iwScanner(), calls
+
+
+def test_iw_scanner_retries_transient_busy_error():
+    """A transient 'Device or resource busy (-16)' is retried with backoff."""
+    calls = []
+
+    def fake_run(cmd, *a, **k):
+        calls.append(cmd)
+        if len(calls) < 3:
+            return FakeResult('command failed: Device or resource busy (-16)')
+        return FakeResult(SAMPLE)
+
+    scanner_mod.subprocess.run = fake_run
+    nets, _ = _run_iw_scanner(calls)
+
+    assert nets, 'should retry and recover from a transient busy error'
+    assert len(calls) == 3, f'expected 3 scan attempts, got {len(calls)}'
+    assert nets[1]['ESSID'] == 'TestNet', nets[1]['ESSID']
+
+
+def test_iw_scanner_times_out_instead_of_hanging():
+    """A wedged driver (subprocess raising TimeoutExpired) is reported, not hung on."""
+    calls = []
+
+    def fake_run(cmd, *a, **k):
+        calls.append(cmd)
+        raise scanner_mod.subprocess.TimeoutExpired(cmd, timeout=k.get('timeout', 15))
+
+    scanner_mod.subprocess.run = fake_run
+    result, _ = _run_iw_scanner(calls)
+
+    assert result is False, 'all attempts timed out -> scan must fail cleanly'
+    assert len(calls) == 4, f'expected 4 timed-out attempts, got {len(calls)}'
+
+
+def test_iw_scanner_yields_reason_on_persistent_busy():
+    """Persistent 'Device or resource busy' after all retries: fail with the reason."""
+    calls = []
+
+    def fake_run(cmd, *a, **k):
+        calls.append(cmd)
+        return FakeResult('command failed: Device or resource busy (-16)')
+
+    scanner_mod.subprocess.run = fake_run
+    result, _ = _run_iw_scanner(calls)
+
+    assert result is False, 'a scan that never succeeds must return False'
+    assert len(calls) == 4, f'expected 4 scan attempts, got {len(calls)}'
+
+
+def test_iw_scanner_falls_back_when_iw_missing():
+    """If the iw binary is missing, the Android universal scan is used instead."""
+    def fake_run(cmd, *a, **k):
+        raise FileNotFoundError('iw not found')
+
+    scanner_mod.subprocess.run = fake_run
+    original_android_network = scanner_mod.AndroidNetwork
+    scanner_mod.AndroidNetwork = lambda: SimpleNamespace(universalWifiScan=lambda: SAMPLE)
+    try:
+        nets, _ = _run_iw_scanner([])
+    finally:
+        scanner_mod.AndroidNetwork = original_android_network
+
+    assert nets, 'should fall back to the universal scan when iw is missing'
+    assert nets[1]['ESSID'] == 'TestNet', nets[1]['ESSID']
+
+
 if __name__ == '__main__':
     test_prompt_network_selects_target()
     test_iw_scanner_parses_wps_network()
     test_iw_scanner_parses_wifi_standard()
     test_scanner_clears_screen_before_each_scan()
+    test_iw_scanner_retries_transient_busy_error()
+    test_iw_scanner_times_out_instead_of_hanging()
+    test_iw_scanner_yields_reason_on_persistent_busy()
+    test_iw_scanner_falls_back_when_iw_missing()
     print('Scanner tests passed ✅')

@@ -31,7 +31,8 @@ Full attribution in [CREDITS.md](CREDITS.md).
   - already saved networks — yellow
 - ⚡ Pixie Dust (offline attack via `pixiewps`)
 - 🔢 Online PIN brute-force (4/7/8-digit mask, session resume)
-- 🎯 PIN prediction from BSSID (3WiFi, D-Link, ASUS, Broadcom and other algorithms)
+- 🎯 PIN prediction from BSSID (3WiFi, D-Link, ASUS, Broadcom and other algorithms),
+  candidates are ranked by likelihood (scoring) so the most probable PINs are tried first
 - 📇 Static PINs for 52 router models (TP-Link, Netgear, Belkin, D-Link, etc.),
   MAC-specific PINs are suggested automatically by OUI
 - 📶 WiFi standard detection (WiFi 6/5) in the scanner table, Android fallback scan

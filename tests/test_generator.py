@@ -72,10 +72,53 @@ def test_farhan_static_pins():
         assert len(str(p)) == 8 and str(p).isdigit(), f'PIN {p} for {ident} is invalid'
 
 
+def test_get_scored_ranks_by_likelihood():
+    """Scored suggestions are sorted by score, most likely first."""
+    gen = WPSpin()
+    # OUI 14D64D is in the D-Link mask list: D-Link algorithms rank above
+    # the broad Broadcom statics that share the same OUI.
+    ranked = gen.getScored('14:D6:4D:12:34:56')
+    assert ranked, 'no suggestions for a D-Link OUI'
+    scores = [item['score'] for item in ranked]
+    assert scores == sorted(scores, reverse=True), 'suggestions are not score-sorted'
+    assert ranked[0]['id'] == 'pinDLink', 'expected pinDLink on top for a D-Link OUI'
+    for item in ranked:
+        assert 0 <= item['score'] <= 100, f'bad score for {item["id"]}'
+        assert len(str(item['pin'])) == 8, f'bad PIN for {item["id"]}'
+
+
+def test_get_scored_exact_bssid_top():
+    """A static PIN tied to the exact BSSID scores 100 and comes first."""
+    gen = WPSpin()
+    bssid = '90:F6:52:DE:23:1B'
+    ranked = gen.getScored(bssid)
+    assert ranked and ranked[0]['id'] == 'pinTDW8960N_90F652DE231B'
+    assert ranked[0]['score'] == 100.0
+    assert ranked[0]['pin'] == gen._generate('pinTDW8960N_90F652DE231B', bssid)
+    # getLikely is driven by the same ranking
+    assert gen.getLikely(bssid) == ranked[0]['pin']
+
+
+def test_get_scored_dedup_colliding_pins():
+    """Duplicate PINs from different algorithms are collapsed to one entry."""
+    gen = WPSpin()
+    # This MAC hits both the full 12-hex TD-W8961ND mask and the 8-hex
+    # TD-W8960N prefix mask, which carry the same PIN (56738209).
+    bssid = '90:F6:52:56:93:5C'
+    ranked = gen.getScored(bssid)
+    pins = [item['pin'] for item in ranked]
+    assert len(pins) == len(set(pins)), 'duplicate PINs were not collapsed'
+    assert ranked[0]['id'] == 'pinTDW8961ND_90F65256935C'
+    assert ranked[0]['score'] == 100.0
+
+
 if __name__ == '__main__':
     test_checksum()
     test_network_address()
     test_get_likely()
     test_suggested_pins_valid()
     test_farhan_static_pins()
+    test_get_scored_ranks_by_likelihood()
+    test_get_scored_exact_bssid_top()
+    test_get_scored_dedup_colliding_pins()
     print('PIN generator tests passed ✅')

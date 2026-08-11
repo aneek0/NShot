@@ -181,15 +181,16 @@ class WPSpin:
         pins = self._getSuggested(bssid)
 
         if len(pins) > 1:
-            logger.info(f'PINs generated for {bssid}:')
-            logger.info('{:<3} {:<10} {:<}'.format(
-                '#', 'PIN', 'Name'
+            logger.info(f'PINs generated for {bssid} (most likely first):')
+            logger.info('{:<3} {:<10} {:<7} {:<}'.format(
+                '#', 'PIN', 'Score', 'Name'
             ))
 
             for i, pin in enumerate(pins):
                 number = f'{i + 1})'
-                line = '{:<3} {:<10} {:<}'.format(
-                    number, pin['pin'], pin['name'])
+                score = f'{pin["score"]:.0f}'
+                line = '{:<3} {:<10} {:<7} {:<}'.format(
+                    number, pin['pin'], score, pin['name'])
                 logger.info(line)
 
             while True:
@@ -367,31 +368,94 @@ class WPSpin:
         pin = str(pin) + str(self.checksum(pin))
         return pin.zfill(8)
 
-    def _getSuggested(self, bssid: str):
-        """Get all suggested WPS pin's for single MAC."""
+    def getScored(self, bssid: str) -> list:
+        """All suggested PINs for a BSSID, ranked by likelihood.
 
-        algos = self._suggest(bssid)
-        res = []
-        for identification in algos:
-            algo = self.ALGOS[identification]
-            item = {}
-            item['id'] = identification
+        Each item carries {'id', 'name', 'pin', 'score'}. The score is an
+        estimate in 0..100 of how likely the algorithm is to produce the
+        correct WPS PIN: 100 = a static PIN tied to the exact BSSID in the
+        vulnerable-device table, lower values = broader OUI/vendor heuristics.
+        Duplicate PINs produced by different algorithms are collapsed, keeping
+        the most likely one.
+        """
 
+        items = []
+        for ident in self._suggest(bssid):
+            algo = self.ALGOS[ident]
             if algo['mode'] == self.ALGO_STATIC:
-                item['name'] = 'Static PIN — ' + algo['name']
+                name = 'Static PIN — ' + algo['name']
             else:
-                item['name'] = algo['name']
+                name = algo['name']
+            items.append({
+                'id': ident,
+                'name': name,
+                'pin': self._generate(ident, bssid),
+                'score': self._score(ident, algo),
+            })
 
-            item['pin'] = self._generate(identification, bssid)
-            res.append(item)
-        return res
+        # Most likely first; on ties the stable sort keeps the original order
+        items.sort(key=lambda item: item['score'], reverse=True)
+
+        # Same PIN from several algorithms: keep only the most likely one
+        seen = set()
+        ranked = []
+        for item in items:
+            if item['pin'] in seen:
+                continue
+            seen.add(item['pin'])
+            ranked.append(item)
+
+        return ranked
+
+    @staticmethod
+    def _maskSpecificity(ident: str) -> int:
+        """Hex length of the MAC-mask suffix in an algorithm id, 0 if none.
+
+        Model-specific static PINs carry the matching MAC prefix in their id
+        (e.g. ``pinTDW8961ND_B0487AD1CC79``). The longer the suffix, the more
+        specific the match: 12 hex digits = exact BSSID, 8-11 = strong
+        prefix, anything else is a broad OUI-level heuristic.
+        """
+
+        suffix = ident.rsplit('_', 1)[-1]
+        if suffix != ident and len(suffix) >= 6 and all(c in '0123456789ABCDEF' for c in suffix):
+            return len(suffix)
+        return 0
+
+    def _score(self, ident: str, algo: dict) -> float:
+        """Likelihood estimate (0..100) that the algorithm yields the right PIN.
+
+        Combines the reliability of the algorithm family with the specificity
+        of the MAC match: a static PIN tied to the exact BSSID is
+        near-certain, a published vendor algorithm (D-Link, ASUS) is likely,
+        legacy generic algorithms (pin24/28/32) are a guess.
+        """
+
+        if algo['mode'] == self.ALGO_EMPTY:
+            return 70.0
+
+        if algo['mode'] == self.ALGO_STATIC:
+            base = 84.0
+        else:
+            base = {
+                'pinDLink': 90.0, 'pinDLink1': 88.0, 'pinASUS': 85.0,
+                'pinAirocon': 80.0, 'pin24': 65.0, 'pin28': 60.0,
+                'pin32': 55.0,
+            }.get(ident, 50.0)
+
+        specificity = self._maskSpecificity(ident)
+        if specificity >= 12:
+            return 100.0
+        if specificity >= 8:
+            return min(100.0, base + 8.0)
+        return base
+
+    def _getSuggested(self, bssid: str):
+        """Get all suggested WPS pin's for single MAC, most likely first."""
+
+        return self.getScored(bssid)
 
     def _getSuggestedList(self, bssid: str):
-        """Get all suggested WPS pin's for single MAC as list."""
+        """Get all suggested WPS pin's for single MAC as a list, most likely first."""
 
-        algos = self._suggest(bssid)
-        res = []
-        for algo in algos:
-            res.append(self._generate(algo, bssid))
-
-        return res
+        return [item['pin'] for item in self.getScored(bssid)]

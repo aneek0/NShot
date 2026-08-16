@@ -171,13 +171,46 @@ def test_locked_retries_then_succeeds():
         conn._cleanup()
 
 
-def test_pixie_dust_skipped_on_wsc_nack():
-    """WSC NACK ends the attempt: Pixie Dust is NOT launched on a NACK."""
-    # Pixie Dust data in wpa_supplicant hexdump format
+class PixieReplayStream:
+    """Fake wpa_supplicant stdout: serves `first` lines once, then `retry`.
+
+    Used to model the real exchange: the probe PIN is rejected (NACK) after a
+    full set of WPS data has been captured, then the recovered PIN is accepted
+    and yields the Network Key.
+    """
+    def __init__(self, first, retry):
+        self._first = list(first)
+        self._retry = list(retry)
+        self._phase = 0
+
+    def readline(self):
+        if self._phase == 0:
+            if self._first:
+                return self._first.pop(0)
+            self._phase = 1
+        if self._retry:
+            return self._retry.pop(0)
+        return ''
+
+    def read(self, _n=0):
+        return ''
+
+    def close(self):
+        pass
+
+
+def test_pixie_dust_runs_after_wsc_nack():
+    """A WSC NACK on the probe PIN carries the data Pixie Dust needs.
+
+    NACK is the normal end of the probe registration: PKE/PKR/AuthKey/
+    E-Hash1/E-Hash2 were captured before the AP rejected the guessed PIN.
+    In pixie_dust mode the tool must feed that data to pixiewps, recover the
+    real PIN, and retry it (this is how SDL-style APs get cracked).
+    """
     def hx(nbytes):
         return 'AB' * nbytes
 
-    pixie_lines = [
+    probe_lines = [
         f"WPS: E-Hash1 (hexdump)(32): {hx(32)}",
         f"WPS: E-Hash2 (hexdump)(32): {hx(32)}",
         f"WPS: AuthKey (hexdump)(32): {hx(32)}",
@@ -186,10 +219,16 @@ def test_pixie_dust_skipped_on_wsc_nack():
         f"WPS: DH own Public Key (hexdump)(192): {hx(192)}",
         f"WPS: DH peer Public Key (hexdump)(192): {hx(192)}",
         "WPS: Building Message M4",
-        "WPS: Received WSC_NACK",   # the AP rejected the registration
+        "WPS: Received WSC_NACK",   # the AP rejected the guessed probe PIN
     ]
 
-    # Mock the pixiewps launch - it must NOT be called on a WSC NACK
+    # On the retry (recovered PIN) the AP hands over the Network Key.
+    retry_lines = [
+        "WPS: Building Message M1",
+        "WPS: Received M1",
+        f"WPS: Network Key (hexdump)(32): {PSK_HEX}",
+    ]
+
     pixie_cmds = []
 
     def fake_pixie_run(cmd, **kwargs):
@@ -198,12 +237,39 @@ def test_pixie_dust_skipped_on_wsc_nack():
 
     pixiewps.subprocess.run = fake_pixie_run
 
-    conn, _ = _setup(pixie_lines, pixie_dust=True)
+    conn, _ = _setup(probe_lines, pixie_dust=True)
+    conn.WPAS.stdout = PixieReplayStream(probe_lines, retry_lines)
 
     try:
         result = conn.singleConnection(BSSID)
-        assert result is False, 'a WSC NACK must end the attempt with False'
-        assert pixie_cmds == [], f'pixiewps must not run after WSC NACK, got: {pixie_cmds}'
+        assert result is True, 'Pixie Dust must recover the PIN and crack the AP'
+        assert pixie_cmds, 'pixiewps must run after a NACK that captured WPS data'
+        wps_regs = [c for c in conn.RETSOCK.sent if c.startswith('WPS_REG')]
+        assert wps_regs[0] == f'WPS_REG {BSSID} 12345670', wps_regs
+        assert wps_regs[1] == f'WPS_REG {BSSID} 12345670', wps_regs
+    finally:
+        conn._cleanup()
+
+
+def test_pixie_dust_insufficient_data_no_run():
+    """An early NACK with no WPS data captured does not launch pixiewps."""
+    lines = [
+        "WPS: Building Message M4",
+        "WPS: Received WSC_NACK",
+    ]
+    pixie_cmds = []
+
+    def fake_pixie_run(cmd, **kwargs):
+        pixie_cmds.append(cmd)
+        return type('FakeRun', (), {'stdout': '[+] WPS pin: 12345670\n', 'returncode': 0})()
+
+    pixiewps.subprocess.run = fake_pixie_run
+
+    conn, _ = _setup(lines, pixie_dust=True)
+    try:
+        result = conn.singleConnection(BSSID, '12345670')
+        assert result is False, 'a NACK with no captured data must end the attempt'
+        assert pixie_cmds == [], 'pixiewps must not run without captured WPS data'
         assert conn.CONNECTION_STATUS.STATUS == 'WSC_NACK'
     finally:
         conn._cleanup()

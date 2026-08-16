@@ -154,14 +154,13 @@ class Initialize:
                     pass
             return True
 
-        # A WSC NACK means the AP actively rejected this registration
-        # transaction (wrong PIN or WPS locked): the exchange completed with a
-        # failure, so there is nothing left for Pixie Dust to salvage. End the
-        # attempt here instead of launching a pixiewps run that would only
-        # repeat the same dead end.
-        if self.CONNECTION_STATUS.STATUS == 'WSC_NACK':
-            return False
-
+        # Pixie Dust mode: a WSC NACK on the probe PIN is expected, not a dead
+        # end. The rejected registration still captured PKE/PKR/AuthKey/
+        # E-Hash1/E-Hash2, which we feed to pixiewps to recover the real PIN
+        # offline and retry. This must run BEFORE the NACK bail-out below,
+        # otherwise a wrong probe PIN would end the attack before pixiewps
+        # ever runs (the bug that made Pixie Dust fail whenever the first
+        # guessed PIN was not already correct).
         if self.ARGS.pixie_dust:
             if self.PIXIE_CREDS.getAll():
                 pin = self.PIXIE_CREDS.runPixieWps(self.ARGS.show_pixie, self.ARGS.pixie_force)
@@ -170,6 +169,11 @@ class Initialize:
                 return False
 
             logger.error('Not enough data to run Pixie Dust attack')
+            return False
+
+        # Pixie Dust off: a WSC NACK means the AP rejected the PIN and there is
+        # nothing left to salvage, so end the attempt.
+        if self.CONNECTION_STATUS.STATUS == 'WSC_NACK':
             return False
 
         if store_pin_on_fail:

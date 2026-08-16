@@ -234,7 +234,7 @@ class WiFiScanner:
             scan_attempts += 1
             try:
                 iw_scan_process = subprocess.run(command,
-                    encoding='utf-8', stdout=subprocess.PIPE,
+                    encoding='utf-8', errors='replace', stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT, timeout=scan_timeout
                 )
             except subprocess.TimeoutExpired:
@@ -319,7 +319,7 @@ class WiFiScanner:
 
                 try:
                     proc = subprocess.run(command,
-                        encoding='utf-8', stdout=subprocess.PIPE,
+                        encoding='utf-8', errors='replace', stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT, timeout=scan_timeout)
                 except subprocess.TimeoutExpired:
                     continue

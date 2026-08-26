@@ -16,7 +16,6 @@ from types import SimpleNamespace
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import nshot                      # noqa: E402
-from src import utils as utils_mod  # noqa: E402
 
 
 def _patch_main_deps():
@@ -39,7 +38,7 @@ def _patch_main_deps():
 
     def fake_ensure_up(interface):
         # New interface bring-up path: record it as the "up" action.
-        calls[f'iface_ups'].append(interface)
+        calls['iface_ups'].append(interface)
         return True  # success
 
     def fake_iface_ctl(interface, action):

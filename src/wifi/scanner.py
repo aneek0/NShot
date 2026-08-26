@@ -11,7 +11,6 @@ import time
 from src import logger
 from src.utils import REPORTS_DIR
 
-import src.args
 import src.utils
 from src.wifi.android import AndroidNetwork
 

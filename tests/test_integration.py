@@ -438,7 +438,7 @@ if __name__ == '__main__':
     test_pin_attack_success_writes_report()
     test_wrong_pin_returns_false()
     test_locked_retries_then_succeeds()
-    test_pixie_dust_skipped_on_wsc_nack()
+    test_pixie_dust_insufficient_data_no_run()
     test_bruteforce_quick_success()
     test_bruteforce_abort_saves_session()
     test_null_pin_mode_uses_zero_pin()

@@ -3,22 +3,16 @@
 #  Origin and attribution: see CREDITS.md.
 
 import os
-import subprocess
 import csv
 import json
 
 from datetime import datetime
-from shutil import which
 from src import logger
 
-import src.wifi.android
 import src.utils
 
 class WiFiCollector:
     """Allows for collecting result, pin or network."""
-
-    def __init__(self):
-        self.ANDROID_NETWORK = src.wifi.android.AndroidNetwork()
 
     @staticmethod
     def writeResult(bssid: str, essid: str, wps_pin: str, wpa_psk: str):

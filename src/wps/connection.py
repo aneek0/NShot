@@ -91,8 +91,8 @@ class Initialize:
         """Prints network credentials after success"""
 
         logger.success(f'WPS PIN: \'{wps_pin}\'')
-        logger.success(f'WPA PSK: \'{wpa_psk}\'')
-        logger.success(f'AP SSID: \'{essid}\'')
+        logger.success(f'WIFi: {essid}')
+        logger.success(f'password: {wpa_psk}')
 
     def singleConnection(self, bssid: str = None, pin: str = None, pbc_mode: bool = False, store_pin_on_fail: bool = False) -> bool:
         """        

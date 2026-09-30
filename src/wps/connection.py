@@ -90,7 +90,7 @@ class Initialize:
     def _credentialPrint(wps_pin: str = None, wpa_psk: str = None, essid: str = None):
         """Prints network credentials after success"""
 
-        logger.success(f'WPS PIN: \'{wps_pin}\'')
+        logger.success(f'pin: {wps_pin}')
         logger.success(f'WIFi: {essid}')
         logger.success(f'password: {wpa_psk}')
 

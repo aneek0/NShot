@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Shared fakes for NShot tests: wpa_supplicant, iw, pixiewps.
+"""Shared fakes for NShot tests.
 
-Reused by integration tests so the code is not duplicated.
+Hardware and interaction enter production code through small interfaces:
+`Attempt` takes a supplicant session, a radio and a pixie runner; `Scanner`
+takes a radio and a subprocess runner. Tests inject fakes for those seams
+instead of patching stdlib or module globals.
 """
 
-from types import SimpleNamespace
+import src.options as options_mod
 
 BSSID = '00:11:22:33:44:55'
 PIN = '12345670'
@@ -32,86 +35,159 @@ BSS AA:BB:CC:DD:EE:FF(on wlan0)
 """
 
 
-class FakeSocket:
-    """Fake wpa_supplicant control socket."""
-    def __init__(self):
+def make_options(**overrides):
+    """Real Options with test-friendly defaults."""
+    return options_mod.Options(**overrides)
+
+
+class FakeSession:
+    """wpa_supplicant session driven by a script.
+
+    `script` holds one list of output lines per `send()`: the first element
+    answers WPS_REG, the second answers a retry (lock, restart, pixie), and so
+    on. This mirrors the real socket, where each command starts a new burst.
+    """
+
+    def __init__(self, script=None, replies=None):
+        self.script = [list(lines) for lines in (script or [])]
+        self.replies = list(replies or [])
         self.sent = []
-        self.reply = b'OK'
+        self.pending = []
+        self.started = self.closed = False
+        self.restarts = 0
+        self.drains = 0
 
-    def bind(self, _addr):
-        pass
-
-    def sendto(self, data, _addr):
-        self.sent.append(data.decode())
-
-    def recvfrom(self, _n):
-        return (self.reply, None)
+    def start(self):
+        self.started = True
 
     def close(self):
-        pass
+        self.closed = True
+
+    def restart(self):
+        self.restarts += 1
+        self.started = True
+
+    def drain(self):
+        # The script is authoritative: draining stale output must not eat it.
+        self.drains += 1
+
+    def send(self, command):
+        self.sent.append(command)
+        self.pending = self.script.pop(0) if self.script else []
+        return self.replies.pop(0) if self.replies else 'OK'
+
+    def send_only(self, command):
+        self.sent.append(command)
+
+    def next_line(self):
+        return self.pending.pop(0) if self.pending else ''
 
 
-class FakeStream:
-    """Fake wpa_supplicant stdout: yields lines in sequence."""
-    def __init__(self, lines):
-        self._lines = list(lines)
+class FakeRadio:
+    """Radio with scriptable link state and recovery outcomes."""
 
-    def read(self, _n=0):
-        return ''
+    def __init__(self, up=True, recover=True, android=None):
+        self.up = up
+        self.recover_ok = recover
+        self.android = android or FakeAndroid()
+        self.recoveries = 0
+        self.retries = 0
 
-    def readline(self):
-        return self._lines.pop(0) if self._lines else ''
+    def _next(self, value):
+        if isinstance(value, (list, tuple)):
+            return value.pop(0) if value else True
+        return value
 
-    def close(self):
-        pass
+    def is_up(self):
+        return self._next(self.up)
 
+    def recover(self):
+        self.recoveries += 1
+        return self._next(self.recover_ok)
 
-class FakeProcess:
-    """Fake wpa_supplicant process."""
-    def __init__(self, *args, **kwargs):
-        self._args = args
-        self.stdout = FakeStream([])
+    def reset_recoveries(self):
+        self.recoveries = 0
 
-    def poll(self):
-        return None
+    def wait_until_up(self, timeout=0):
+        return True
 
-    def communicate(self, *a, **k):
-        return ('', None)
+    def ensure_up(self):
+        return True
 
-    def terminate(self):
-        pass
-
-    def kill(self):
-        pass
-
-    def wait(self, *a, **k):
-        return 0
-
-
-class FakeIwResult:
-    """Fake subprocess.run result for `iw scan`."""
-    def __init__(self, stdout):
-        self.stdout = stdout
-
-
-BASE_ARGS = dict(
-    verbose=False, show_pixie=False, pixie_force=False, timeout=0,
-    delay=0, write=True, pixie_dust=False, null_pin=False, loop=False,
-)
+    def retry(self, operation, attempts=4, on_retry=None):
+        self.retries += 1
+        result = None
+        for attempt in range(1, attempts + 1):
+            result = operation()
+            if result:
+                return result
+            if on_retry:
+                on_retry(attempt)
+        return result
 
 
-def make_args(**overrides):
-    return SimpleNamespace(**{**BASE_ARGS, **overrides})
+class FakeAndroid:
+    """Android framework stand-in for the fallback scan path."""
+
+    def __init__(self, scan_output=''):
+        self.scan_output = scan_output
+        self.scans = 0
+
+    def universalWifiScan(self):  # noqa: N802 - mirrors the production API
+        self.scans += 1
+        return self.scan_output
 
 
-def mock_wpa_supplicant_launch(conn_mod, utils_mod):
-    """Replace wpa_supplicant launch and interface check on machines without hardware."""
-    conn_mod.subprocess.Popen = FakeProcess
-    conn_mod.os.path.exists = lambda p: True
-    if hasattr(utils_mod, 'isInterfaceUp'):
-        utils_mod.isInterfaceUp = lambda interface: True
+class FakePixieRunner:
+    """pixiewps stand-in: records the captured data, returns a fixed PIN."""
+
+    def __init__(self, pin=PIN):
+        self.pin = pin
+        self.calls = []
+
+    def __call__(self, data, show_command=False, full_range=False):
+        self.calls.append((data, show_command, full_range))
+        return self.pin
+
+
+# supplicant label -> (pixiewps field, valid hex value of the enforced length)
+PIXIE_FIELDS = {
+    'DH peer Public Key': ('PKE', 'AA' * 192),
+    'DH own Public Key': ('PKR', 'BB' * 192),
+    'E-Hash1': ('E_HASH1', 'CC' * 32),
+    'E-Hash2': ('E_HASH2', 'DD' * 32),
+    'AuthKey': ('AUTHKEY', 'EE' * 32),
+    'Enrollee Nonce': ('E_NONCE', '11' * 16),
+    'Registrar Nonce': ('R_NONCE', '22' * 16),
+}
+
+
+def pixie_script():
+    """A rejected registration that captured every field pixiewps needs."""
+    lines = ['WPS: Building Message M1', 'WPS: Received M1']
+    lines += [f'WPS: {label} (hexdump): {value}'
+              for label, (_field, value) in PIXIE_FIELDS.items()]
+    lines += ['WPS: Building Message M4', 'WPS: Received WSC_NACK']
+    return lines
 
 
 def network_key_line():
     """wpa_supplicant line that leads to GOT_PSK (Network Key hexdump)."""
-    return f"WPS: Network Key (hexdump)(32): {PSK_HEX}"
+    return f'WPS: Network Key (hexdump)(32): {PSK_HEX}'
+
+
+def success_script(essid='TestNet'):
+    """One registration that ends with the PSK."""
+    return [
+        'WPS: Building Message M1',
+        'WPS: Received M1',
+        f"wlan0: Trying to associate with '{essid}' SSID: {BSSID}",
+        network_key_line(),
+    ]
+
+
+def nack_script(messages=('M1', 'M4')):
+    """One registration rejected with WSC_NACK after the given messages."""
+    lines = [f'WPS: Building Message {message}' for message in messages]
+    lines.append('WPS: Received WSC_NACK')
+    return lines

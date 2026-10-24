@@ -14,6 +14,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import src.utils as u  # noqa: E402
+from src.store import Store  # noqa: E402
 
 
 class FakeDirEntry:
@@ -135,6 +136,14 @@ def test_iface_ctl_builds_command():
     assert captured[0] == ['ip', 'link', 'set', 'wlan0', 'up'], captured
 
 
+def test_iface_ctl_reports_failure_without_crashing():
+    """A missing `ip` binary returns an error code instead of UnboundLocalError."""
+    u.subprocess.run = mock.Mock(side_effect=FileNotFoundError('ip'))
+    u.isAndroid = lambda: False
+
+    assert u.ifaceCtl('wlan0', 'up') == -1
+
+
 def test_ensure_interface_up_fast_path_when_already_up():
     """If the interface is already UP, ensureInterfaceUp returns without touching it."""
     with mock.patch.object(u, 'isInterfaceUp', return_value=True), \
@@ -180,7 +189,9 @@ def test_add_vulnerable_ap_appends_and_dedups():
 def test_kill_interfering_kills_and_saves():
     """killInterfering kills interfering processes and saves them for restore."""
     tmp = tempfile.mkdtemp()
-    u.SESSIONS_DIR = tmp + os.sep
+    u.DEFAULT_STORE = Store(tmp)
+    u.DEFAULT_STORE.ensure()
+
 
     killed = []
     real_open = open
@@ -211,15 +222,16 @@ def test_kill_interfering_kills_and_saves():
         u.killInterfering()
 
     assert killed == [(1234, 15)], killed
-    saved = real_open(os.path.join(tmp, 'killed_processes.json'), encoding='utf-8').read()
+    saved = u.DEFAULT_STORE.killed_processes_path().read_text(encoding='utf-8')
     assert 'NetworkManager' in saved and '1234' in saved, saved
 
 
 def test_restore_processes_relaunches():
     """restoreProcesses relaunches saved processes by cmdline."""
     tmp = tempfile.mkdtemp()
-    u.SESSIONS_DIR = tmp + os.sep
-    with open(os.path.join(tmp, 'killed_processes.json'), 'w', encoding='utf-8') as f:
+    u.DEFAULT_STORE = Store(tmp)
+    u.DEFAULT_STORE.ensure()
+    with open(u.DEFAULT_STORE.killed_processes_path(), 'w', encoding='utf-8') as f:
         f.write('[["1234", "NetworkManager", "NetworkManager --foo"]]')
 
     launched = []
@@ -235,7 +247,7 @@ def test_restore_processes_relaunches():
 def test_restore_processes_no_file_is_noop():
     """restoreProcesses without a save file does nothing."""
     tmp = tempfile.mkdtemp()
-    u.SESSIONS_DIR = tmp + os.sep
+    u.DEFAULT_STORE = Store(tmp)
     launched = []
     class FakePopen:
         def __init__(self, cmdline, *a, **k):
@@ -252,6 +264,7 @@ if __name__ == '__main__':
     test_is_interface_up()
     test_is_interface_up_fast_path_skips_subprocess()
     test_iface_ctl_builds_command()
+    test_iface_ctl_reports_failure_without_crashing()
     test_add_vulnerable_ap_appends_and_dedups()
     test_kill_interfering_kills_and_saves()
     test_restore_processes_relaunches()

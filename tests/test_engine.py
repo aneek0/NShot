@@ -1,191 +1,159 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Unit tests for the attack engine (src/wps/connection.py, bruteforce.py, pixiewps.py).
+"""Unit tests for the WPS engine seams: pixiewps adapter, attempt reuse.
 
-Does not require root or a Wi-Fi adapter: the wpa_supplicant and pixiewps
-launches are mocked.
+The supplicant session and the radio are fakes here; what is exercised is the
+command pixiewps receives and the objects `Attempt` builds.
 """
 
-import sys
 import os
-import time
+import sys
+
 from types import SimpleNamespace
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.wps import connection as conn_mod  # noqa: E402
-from src.wps import bruteforce as bf_mod    # noqa: E402
-from src.wps import pixiewps                # noqa: E402
+from src.store import Store
+from src.wps import pixiewps
+from src.wps.attempt import Attempt
+from src.wps.protocol import PixieData
 
-TEST_ARGS = SimpleNamespace(
-    verbose=False, show_pixie=False, pixie_force=False, timeout=60,
-    delay=0, write=False, pixie_dust=False, null_pin=False, loop=False,
-)
+from tests._fakes import BSSID, PIN, FakePixieRunner, FakeRadio, FakeSession, make_options
 
 
-class FakeProcess:
-    """Fake wpa_supplicant process."""
-    def __init__(self, *args, **kwargs):
-        self._args = args
-        self.stdout = type('FakeStream', (), {'readline': lambda self: '', 'close': lambda self: None})()
-
-    def poll(self):
-        return None  # process is "alive"
-
-    def communicate(self, *a, **k):
-        return ('fake output', None)
-
-    def terminate(self):
-        pass
-
-    def wait(self):
-        pass
-
-
-def _mock_wpas_launch():
-    """Replace the wpa_supplicant launch and the control-socket existence."""
-    conn_mod.subprocess.Popen = FakeProcess
-    conn_mod.os.path.exists = lambda p: True
+def _data():
+    data = PixieData()
+    data.PKE = 'PKE'
+    data.PKR = 'PKR'
+    data.E_HASH1 = 'H1'
+    data.E_HASH2 = 'H2'
+    data.AUTHKEY = 'AK'
+    data.E_NONCE = 'EN'
+    data.R_NONCE = 'RN'
+    data.BSSID = 'AA:BB:CC:DD:EE:FF'
+    return data
 
 
 def test_pixiewps_command_build():
-    """Build the pixiewps command."""
-    data = pixiewps.Data()
-    data.PKE = 'PKE'
-    data.PKR = 'PKR'
-    data.E_HASH1 = 'H1'
-    data.E_HASH2 = 'H2'
-    data.AUTHKEY = 'AK'
-    data.E_NONCE = 'EN'
-    data.R_NONCE = 'RN'
-    data.BSSID = 'AA:BB:CC:DD:EE:FF'
+    """Every captured field reaches pixiewps, with --force for the full range."""
+    command = pixiewps.build_command(_data(), full_range=True)
 
-    cmd = data._getPixieCmd(full_range=True)
-    assert cmd[0] == 'pixiewps'
-    assert '--pke' in cmd and cmd[cmd.index('--pke') + 1] == 'PKE'
-    assert '--e-bssid' in cmd
-    assert '--mode' in cmd and cmd[cmd.index('--mode') + 1] == '1,2,3,4,5'
-    assert '--force' in cmd  # full_range
+    assert command[0] == 'pixiewps'
+    assert command[command.index('--pke') + 1] == 'PKE'
+    assert command[command.index('--pkr') + 1] == 'PKR'
+    assert command[command.index('--e-bssid') + 1] == 'AA:BB:CC:DD:EE:FF'
+    assert command[command.index('--mode') + 1] == '1,2,3,4,5'
+    assert '--force' in command
 
 
-def test_pixiewps_run_parsing():
-    """Parse pixiewps output."""
+def test_pixiewps_command_without_force():
+    """A normal-range run does not pass --force."""
+    assert '--force' not in pixiewps.build_command(_data(), full_range=False)
+
+
+def test_pixiewps_run_parses_pin():
+    """The PIN line is extracted and the command is actually executed."""
     captured = []
+    result = SimpleNamespace(stdout='[+] WPS pin: 12345670\n', returncode=0)
 
-    class FakeRun:
-        def __init__(self, stdout, returncode=0):
-            self.stdout = stdout
-            self.returncode = returncode
+    def fake_run(command, **kwargs):
+        captured.append(command)
+        return result
 
-    def fake_run(cmd, **kwargs):
-        captured.append(cmd)
-        return FakeRun('[+] WPS pin: 12345670\n')
+    with mock.patch.object(pixiewps.subprocess, 'run', side_effect=fake_run), \
+         mock.patch('builtins.print'):
+        pin = pixiewps.run(_data())
 
-    pixiewps.subprocess.run = fake_run
-    data = pixiewps.Data()
-    data.PKE = 'PKE'
-    data.PKR = 'PKR'
-    data.E_HASH1 = 'H1'
-    data.E_HASH2 = 'H2'
-    data.AUTHKEY = 'AK'
-    data.E_NONCE = 'EN'
-    data.R_NONCE = 'RN'
-    data.BSSID = 'AA:BB:CC:DD:EE:FF'
-
-    pin = data.runPixieWps(show_command=False)
-    assert pin == '12345670', f'Expected PIN 12345670, got {pin!r}'
-    assert captured, 'pixiewps command was not run'
+    assert pin == PIN
+    assert captured and captured[0][0] == 'pixiewps'
 
 
-def test_pixiewps_empty_pin():
-    """PIN '<empty>' becomes an empty PIN."""
-    def fake_run(cmd, **kwargs):
-        return type('FakeRun', (), {'stdout': '[+] WPS pin: <empty>\n', 'returncode': 0})()
+def test_pixiewps_run_shows_command_when_asked():
+    """show_command prints the command line before running it."""
+    printed = []
 
-    pixiewps.subprocess.run = fake_run
-    data = pixiewps.Data()
-    data.PKE = data.PKR = data.E_HASH1 = data.E_HASH2 = 'x'
-    data.AUTHKEY = data.E_NONCE = data.R_NONCE = 'x'
-    data.BSSID = 'AA:BB:CC:DD:EE:FF'
-    assert data.runPixieWps() == "''"
+    with mock.patch.object(pixiewps.subprocess, 'run',
+                           return_value=SimpleNamespace(stdout='', returncode=0)), \
+         mock.patch.object(pixiewps.logger, 'info',
+                           side_effect=lambda message, *a, **k: printed.append(message)), \
+         mock.patch('builtins.print'):
+        pixiewps.run(_data(), show_command=True)
 
-
-def test_connection_initializes_with_injected_args():
-    """connection.Initialize accepts args and builds the correct wpa_supplicant command."""
-    _mock_wpas_launch()
-    conn = conn_mod.Initialize('wlan0', TEST_ARGS)
-    try:
-        assert conn.INTERFACE == 'wlan0'
-        assert conn.ARGS is TEST_ARGS, 'args were not passed into the engine'
-        cmd = conn.WPAS._args[0]
-        assert cmd[0] == 'wpa_supplicant'
-        assert '-iwlan0' in cmd, cmd
-        assert any(c.startswith('-c') for c in cmd), cmd
-    finally:
-        conn._cleanup()
+    assert any('--pke PKE' in message for message in printed), printed
 
 
-def test_bruteforce_initializes_with_injected_args():
-    """bruteforce.Initialize creates its connection with the same args."""
-    _mock_wpas_launch()
-    bf = bf_mod.Initialize('wlan0', TEST_ARGS)
-    try:
-        assert bf.ARGS is TEST_ARGS
-        assert bf.CONNECTION.ARGS is TEST_ARGS, 'args were not passed into the connection inside bruteforce'
-        assert bf.CONNECTION.INTERFACE == 'wlan0'
-    finally:
-        bf.CONNECTION._cleanup()
+def test_pixiewps_empty_pin_is_marked():
+    """pixiewps reports an empty PIN as '<empty>'; it is handed back as '' quoted."""
+    with mock.patch.object(pixiewps.subprocess, 'run',
+                           return_value=SimpleNamespace(stdout='[+] WPS pin: <empty>\n',
+                                                        returncode=0)), \
+         mock.patch('builtins.print'):
+        assert pixiewps.run(_data()) == "''"
 
 
-def test_reusable_objects_created_once():
-    """WPSpin/WiFiCollector are created once and reused between attempts."""
-    _mock_wpas_launch()
-    conn = conn_mod.Initialize('wlan0', TEST_ARGS)
-    try:
-        assert conn.GENERATOR is not None and conn.COLLECTOR is not None
-        import src.wps.connection as c
-        calls = []
-        orig_gen = c.src.wps.generator.WPSpin
-        orig_col = c.src.wifi.collector.WiFiCollector
-        c.src.wps.generator.WPSpin = lambda: calls.append(1) or orig_gen()
-        c.src.wifi.collector.WiFiCollector = lambda: calls.append(2) or orig_col()
-        try:
-            conn.singleConnection('AA:BB:CC:DD:EE:FF', '12345670')
-        except Exception:
-            pass  # the fake stream does not produce full success - only check object creation
-        finally:
-            c.src.wps.generator.WPSpin = orig_gen
-            c.src.wifi.collector.WiFiCollector = orig_col
-        assert calls == [], f'should not create new generators/collectors, got {calls}'
-    finally:
-        conn._cleanup()
+def test_pixiewps_failure_returns_none():
+    """Non-zero exit, no PIN line, or a missing binary all mean "no PIN"."""
+    with mock.patch.object(pixiewps.subprocess, 'run',
+                           return_value=SimpleNamespace(stdout='[+] WPS pin: 1\n',
+                                                        returncode=1)), \
+         mock.patch('builtins.print'):
+        assert pixiewps.run(_data()) is None
+
+    with mock.patch.object(pixiewps.subprocess, 'run',
+                           return_value=SimpleNamespace(stdout='nothing useful\n',
+                                                        returncode=0)), \
+         mock.patch('builtins.print'):
+        assert pixiewps.run(_data()) is None
+
+    with mock.patch.object(pixiewps.subprocess, 'run',
+                           side_effect=FileNotFoundError('pixiewps')):
+        assert pixiewps.run(_data()) is None
 
 
-def test_drain_wpas_non_blocking_with_pipe():
-    """_drainWpas flushes backlog via select without blocking."""
-    _mock_wpas_launch()
-    conn = conn_mod.Initialize('wlan0', TEST_ARGS)
-    try:
-        r, w = os.pipe()
-        with os.fdopen(w, 'w', encoding='utf-8') as fw:
-            fw.write('WPS: Building Message M1\n' * 5)
-            fw.flush()
-            with os.fdopen(r, 'r', encoding='utf-8') as fr:
-                conn.WPAS.stdout = fr
-                start = time.monotonic()
-                conn._drainWpas()
-                elapsed = time.monotonic() - start
-                assert elapsed < 0.5, f'_drainWpas blocked for {elapsed:.2f}s'
-    finally:
-        conn._cleanup()
+def test_attempt_creates_one_session_and_reuses_it(tmp_path):
+    """Two attempts on one Attempt reuse the supplicant session."""
+    store = Store(tmp_path)
+    created = []
+
+    def factory():
+        created.append(FakeSession(script=[[]]))
+        return created[-1]
+
+    attempt = Attempt('wlan0', make_options(write=False), store=store,
+                      radio=FakeRadio(), session_factory=factory,
+                      pixie_runner=FakePixieRunner())
+
+    attempt.attempt(BSSID, PIN)
+    attempt.attempt(BSSID, PIN)
+
+    assert len(created) == 1, 'the session must be started once and reused'
+    assert created[0].started
+    attempt.close()
+    assert created[0].closed
 
 
-if __name__ == '__main__':
-    test_pixiewps_command_build()
-    test_pixiewps_run_parsing()
-    test_pixiewps_empty_pin()
-    test_connection_initializes_with_injected_args()
-    test_bruteforce_initializes_with_injected_args()
-    test_reusable_objects_created_once()
-    test_drain_wpas_non_blocking_with_pipe()
-    print('Attack engine tests passed ✅')
+def test_attempt_context_manager_closes(tmp_path):
+    """The context manager owns the session lifecycle."""
+    session = FakeSession(script=[[]])
+    attempt = Attempt('wlan0', make_options(write=False), store=Store(tmp_path),
+                      radio=FakeRadio(), session_factory=lambda: session,
+                      pixie_runner=FakePixieRunner())
+
+    with attempt as opened:
+        assert opened is attempt
+        assert session.started and not session.closed
+
+    assert session.closed
+
+
+def test_attempt_uses_injected_store_for_pins(tmp_path):
+    """A recovered PIN is kept in the injected store, not a global one."""
+    store = Store(tmp_path)
+    attempt = Attempt('wlan0', make_options(write=False), store=store,
+                      radio=FakeRadio(), session_factory=lambda: FakeSession(),
+                      pixie_runner=FakePixieRunner())
+    attempt.store.save_pin(BSSID, PIN)
+
+    assert store.load_pin(BSSID) == PIN
+    assert (store.pixie_pins / '001122334455.pin').exists()

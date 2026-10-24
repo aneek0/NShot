@@ -1,257 +1,266 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Unit tests for the `iw scan` output parser (src/wifi/scanner.py)."""
+"""Scan parsing, scan retry policy, and the network table."""
 
-import sys
 import os
+import subprocess
+import sys
+
 from types import SimpleNamespace
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.wifi import scanner as scanner_mod  # noqa: E402
+from src.wifi import table as table_mod
+from src.wifi.iwparse import parse_scan_lines
+from src.wifi.scanner import MAX_EMPTY_SCAN_RETRIES, SCAN_ATTEMPTS, Scanner
 
-TEST_ARGS = SimpleNamespace(clear=False, verbose=False, reverse_scan=False)
-
-# Example iw scan output: a network with WPS 1.0 and a network without WPS (must be filtered)
-SAMPLE = """BSS 00:11:22:33:44:55(on wlan0)
-\tSSID: TestNet
-\tsignal: -45.00 dBm
-\tcapability: ESS Privacy
-\tRSN:\t * Version: 1
-WPS:\t * Version: 1.0
-\t * AP setup locked: 0x0
-\t * Authentication suites: WPA-Personal
-\t * Model: TestRouter
-\t * Model Number: T1000
-\t * Device name: TestWSC
-BSS AA:BB:CC:DD:EE:FF(on wlan0)
-\tSSID: NoWpsNet
-\tsignal: -60.00 dBm
-\tRSN:\t * Version: 1
-\t * Authentication suites: WPA2-Personal
-"""
+from tests._fakes import BSSID, IW_SAMPLE, FakeAndroid, FakeRadio, make_options
 
 
 class FakeResult:
     """Fake subprocess.run result."""
-    def __init__(self, stdout):
+
+    def __init__(self, stdout='', returncode=0):
         self.stdout = stdout
+        self.returncode = returncode
 
 
-def test_prompt_network_selects_target():
-    """Interactive target selection: input '1' -> (BSSID, network_info)."""
-    import builtins
-    scanner_mod.subprocess.run = lambda *a, **k: FakeResult(SAMPLE)
+def _scanner(radio=None, results=None):
+    """Scanner whose `iw` is a list of results (or one callable)."""
+    calls = []
 
-    real_input = builtins.input
-    builtins.input = lambda prompt='': '1'
-    try:
-        s = scanner_mod.WiFiScanner('wlan0', vuln_list=None, args=TEST_ARGS)
-        import io
-        from contextlib import redirect_stdout
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            result = s.promptNetwork()
-    finally:
-        builtins.input = real_input
+    def runner(command, **kwargs):
+        calls.append(command)
+        result = results() if callable(results) else results
+        if isinstance(result, Exception):
+            raise result
+        if isinstance(result, list):
+            result = result.pop(0) if result else FakeResult('')
+        return result
 
-    assert result is not None
-    bssid, info = result
-    assert bssid == '00:11:22:33:44:55', bssid
-    assert info['ESSID'] == 'TestNet', info['ESSID']
+    scanner = Scanner('wlan0', make_options(), radio=radio or FakeRadio(),
+                      runner=runner)
+    return scanner, calls
 
 
-def test_iw_scanner_parses_wps_network():
-    scanner_mod.subprocess.run = lambda *a, **k: FakeResult(SAMPLE)
-    s = scanner_mod.WiFiScanner('wlan0', vuln_list=None, args=TEST_ARGS)
-    # Capture the table output
-    import io
-    from contextlib import redirect_stdout
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        nets = s._iwScanner()
+# -- parsing ---------------------------------------------------------------
 
-    assert nets, 'No WPS networks found'
-    assert len(nets) == 1, f'expected 1 WPS network, got {len(nets)}'
-    n = nets[1]
-    assert n['BSSID'] == '00:11:22:33:44:55', n['BSSID']
-    assert n['ESSID'] == 'TestNet', n['ESSID']
-    assert n['WPS'] is True
-    assert n['WPS version'] == '1.0', n['WPS version']
-    assert n['Level'] == -45, n['Level']
-    assert n['Model'] == 'TestRouter', n['Model']
-    assert n['Model number'] == 'T1000', n['Model number']
-    assert n['Device name'] == 'TestWSC', n['Device name']
+def test_parses_wps_network_fields():
+    """A WPS AP keeps its ESSID, WPS version, model and WSC name."""
+    networks = parse_scan_lines(IW_SAMPLE.splitlines())
+
+    assert len(networks) == 1, 'networks without WPS must be filtered out'
+    network = networks[0]
+    assert network['BSSID'] == BSSID
+    assert network['ESSID'] == 'TestNet'
+    assert network['WPS version'] == '1.0'
+    assert network['WPS locked'] is False
+    assert network['Level'] == -45
+    assert network['Model'] == 'TestRouter'
+    assert network['Model number'] == 'T1000'
+    assert network['Device name'] == 'TestWSC'
+    assert network['Security type'] == 'WPA2'
 
 
-def test_iw_scanner_parses_wifi_standard():
-    """WiFi standard detection from iw scan lines (HE/VHT/802.11ax/ac)."""
-    sample = SAMPLE.replace(
-        "\tRSN:\t * Version: 1",
-        "\tRSN:\t * Version: 1\n\t * HE IEs:\n\t * 802.11ax\n", 1
+def test_hidden_essid_is_marked():
+    """An empty or whitespace ESSID is shown as <hidden>, not as ''."""
+    lines = [
+        f'BSS {BSSID}(on wlan0)',
+        r'\tSSID: ',
+        r'\tsignal: -40.00 dBm',
+        r'WPS:\t * Version: 1.0',
+    ]
+    networks = parse_scan_lines([line.replace('\\t', '\t') for line in lines])
+
+    assert networks[0]['ESSID'] == '<hidden>'
+
+
+def test_wps_2_locked_and_wifi_standard():
+    """Version 2.0, the lock flag and the 802.11 standard are parsed."""
+    lines = [
+        f'BSS {BSSID}(on wlan0)',
+        '\tSSID: ModernAP',
+        '\tsignal: -50.00 dBm',
+        '\tcapability: ESS Privacy',
+        '\tRSN:\t * Version: 1',
+        '\t * Authentication suites: PSK SAE',
+        '\tHE   IEs:',
+        'WPS:\t * Version: 1.0',
+        '\t * Version2: 2.0',
+        '\t * AP setup locked: 0x01',
+    ]
+    network = parse_scan_lines(lines)[0]
+
+    assert network['WPS version'] == '2.0'
+    assert network['WPS locked'] is True
+    assert network['WiFi Standard'] == 'WiFi 6 (802.11ax)'
+
+
+def test_networks_sorted_by_signal():
+    """Strongest signal first, whatever the scan order was."""
+    lines = [
+        'BSS AA:AA:AA:AA:AA:AA(on wlan0)',
+        '\tSSID: Weak',
+        '\tsignal: -80.00 dBm',
+        'WPS:\t * Version: 1.0',
+        f'BSS {BSSID}(on wlan0)',
+        '\tSSID: Strong',
+        '\tsignal: -30.00 dBm',
+        'WPS:\t * Version: 1.0',
+    ]
+    networks = parse_scan_lines(lines)
+
+    assert [network['ESSID'] for network in networks] == ['Strong', 'Weak']
+
+
+def test_truncated_scan_raises():
+    """`command failed:` inside output is an error, not an empty scan."""
+    with pytest.raises(ValueError):
+        parse_scan_lines(['BSS 00:11:22:33:44:55(on wlan0)',
+                          'command failed: Device or resource busy (-16)'])
+
+
+# -- scan policy -----------------------------------------------------------
+
+def test_scan_returns_parseable_networks():
+    """A single successful scan yields the WPS networks."""
+    scanner, calls = _scanner(results=FakeResult(IW_SAMPLE))
+
+    networks = scanner.scan()
+
+    assert len(calls) == 1
+    assert [network['ESSID'] for network in networks] == ['TestNet']
+
+
+def test_transient_busy_is_retried():
+    """'Device or resource busy' clears after a retry instead of failing."""
+    busy = FakeResult('command failed: Device or resource busy (-16)')
+    scanner, calls = _scanner(results=[busy, busy, FakeResult(IW_SAMPLE)])
+
+    networks = scanner.scan()
+
+    assert networks
+    assert len(calls) == 3, f'expected 3 scan attempts, got {len(calls)}'
+
+
+def test_persistent_busy_fails_after_all_attempts():
+    """A scan that never succeeds reports failure instead of an empty table."""
+    busy = FakeResult('command failed: Device or resource busy (-16)')
+    scanner, calls = _scanner(results=lambda: busy)
+
+    assert scanner.scan() is None
+    assert len(calls) == SCAN_ATTEMPTS
+
+
+def test_scan_timeout_does_not_hang():
+    """A wedged driver (TimeoutExpired) ends after the bounded attempts."""
+    timeout = subprocess.TimeoutExpired('iw', timeout=15)
+    scanner, calls = _scanner(results=timeout)
+
+    assert scanner.scan() is None
+    assert len(calls) == SCAN_ATTEMPTS
+
+
+def test_empty_scan_is_retried():
+    """A successful but empty scan is retried while the driver settles."""
+    empty = FakeResult('BSS aa:bb:cc:dd:ee:ff(on wlan0)\n\tSSID: NoWps\n')
+    results = [empty] * MAX_EMPTY_SCAN_RETRIES + [FakeResult(IW_SAMPLE)]
+    scanner, calls = _scanner(results=results)
+
+    networks = scanner.scan()
+
+    assert networks
+    assert len(calls) == MAX_EMPTY_SCAN_RETRIES + 1, calls
+
+
+def test_iw_missing_uses_framework_fallback():
+    """Without `iw`, the Android framework scan replaces the binary."""
+    android = FakeAndroid(IW_SAMPLE)
+    scanner, calls = _scanner(radio=FakeRadio(android=android),
+                              results=FileNotFoundError('iw'))
+
+    networks = scanner.scan()
+
+    assert networks and networks[0]['ESSID'] == 'TestNet'
+    assert android.scans == 1
+    assert len(calls) == 1
+
+
+def test_fallback_without_output_fails():
+    """A silent framework fallback is a scan failure, not an empty list."""
+    scanner, _ = _scanner(radio=FakeRadio(android=FakeAndroid('')),
+                          results=FileNotFoundError('iw'))
+
+    assert scanner.scan() is None
+
+
+# -- table -----------------------------------------------------------------
+
+def _network(essid, level=-45, version='1.0', locked=False, model='M', name='N'):
+    return {
+        'BSSID': BSSID, 'ESSID': essid, 'Security type': 'WPA2', 'Level': level,
+        'WPS version': version, 'WPS locked': locked, 'Model': model,
+        'Model number': '1', 'Device name': name, 'WiFi Standard': '',
+    }
+
+
+def test_render_numbers_networks_and_marks_stored():
+    """Rows are numbered from 1 and a cracked network is highlighted."""
+    lines = []
+    table = table_mod.render(
+        [_network('Known'), _network('Other', level=-70)],
+        stored={(BSSID, 'Known')},
+        print_function=lines.append,
     )
-    scanner_mod.subprocess.run = lambda *a, **k: FakeResult(sample)
-    s = scanner_mod.WiFiScanner('wlan0', vuln_list=None, args=TEST_ARGS)
-    import io
-    from contextlib import redirect_stdout
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        nets = s._iwScanner()
-    n = nets[1]
-    assert n['WiFi Standard'] == 'WiFi 6 (802.11ax)', n['WiFi Standard']
+
+    assert sorted(table) == [1, 2]
+    assert table[1]['ESSID'] == 'Known'
+    assert any('\033[1m\033[93m' in line and 'Known' in line for line in lines), lines
+    assert not any('\033[1m\033[93m' in line and 'Other' in line for line in lines)
 
 
-def test_scanner_clears_screen_before_each_scan():
-    """The screen is cleared before every scanner run (initial and Enter refresh)."""
-    import builtins
-    import io
-    from contextlib import redirect_stdout
+def test_render_reverses_when_asked():
+    """--reverse-scan flips the display order but keeps the numbering."""
+    lines = []
+    table = table_mod.render(
+        [_network('First', level=-30), _network('Second', level=-70)],
+        reverse=True, print_function=lines.append,
+    )
 
-    scanner_mod.subprocess.run = lambda *a, **k: FakeResult(SAMPLE)
-    clears = []
-    scanner_mod.src.utils.clearScreen = lambda: clears.append(1)
-
-    real_input = builtins.input
-    inputs = iter(['', '1'])  # Enter -> refresh, then pick a target
-    builtins.input = lambda prompt='': next(inputs)
-    try:
-        s = scanner_mod.WiFiScanner('wlan0', vuln_list=None, args=TEST_ARGS)
-        buf = io.StringIO()
-        with redirect_stdout(buf):
-            result = s.promptNetwork()
-    finally:
-        builtins.input = real_input
-
-    assert result is not None
-    # Initial scan + Enter refresh = at least 2 screen clears
-    assert len(clears) >= 2, f'expected at least 2 clears, got: {clears}'
+    assert table[1]['ESSID'] == 'First'
+    body = [line for line in lines if 'First' in line or 'Second' in line]
+    assert 'Second' in body[0], body
 
 
-def _run_iw_scanner(calls):
-    """Run _iwScanner with all hardware/state helpers mocked (fast, isolated)."""
-    import io
-    from contextlib import redirect_stdout
-    scanner_mod.time.sleep = lambda s: None
-    scanner_mod.src.utils.ensureInterfaceUp = lambda *a, **k: True
-    scanner_mod.src.utils.isAndroid = lambda: False
-    scanner_mod.src.utils.clearScreen = lambda: None
-    # The real waitForInterfaceUp polls for up to 20s of wall time; with a
-    # mocked sleep it would spin through millions of instant iterations, so
-    # it must be mocked here too.
-    scanner_mod.src.utils.waitForInterfaceUp = lambda *a, **k: True
-    s = scanner_mod.WiFiScanner('wlan0', vuln_list=None, args=TEST_ARGS)
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        return s._iwScanner(), calls
+def test_prompt_returns_selection(monkeypatch):
+    """Typing a number that exists selects that network."""
+    monkeypatch.setattr('builtins.input', lambda prompt='': '2')
+    networks = {1: _network('One'), 2: _network('Two')}
+
+    bssid, network = table_mod.prompt(networks)
+
+    assert bssid == BSSID
+    assert network['ESSID'] == 'Two'
 
 
-def test_iw_scanner_retries_transient_busy_error():
-    """A transient 'Device or resource busy (-16)' is retried with backoff."""
-    calls = []
+def test_prompt_refreshes_on_empty_input(monkeypatch):
+    """Enter (or r/0) asks the caller for a fresh scan."""
+    monkeypatch.setattr('builtins.input', lambda prompt='': '')
 
-    def fake_run(cmd, *a, **k):
-        calls.append(cmd)
-        if len(calls) < 3:
-            return FakeResult('command failed: Device or resource busy (-16)')
-        return FakeResult(SAMPLE)
-
-    scanner_mod.subprocess.run = fake_run
-    nets, _ = _run_iw_scanner(calls)
-
-    assert nets, 'should retry and recover from a transient busy error'
-    assert len(calls) == 3, f'expected 3 scan attempts, got {len(calls)}'
-    assert nets[1]['ESSID'] == 'TestNet', nets[1]['ESSID']
+    assert table_mod.prompt({1: _network('One')}) is None
 
 
-def test_iw_scanner_times_out_instead_of_hanging():
-    """A wedged driver (subprocess raising TimeoutExpired) is reported, not hung on."""
-    calls = []
+def test_prompt_rejects_unknown_number(monkeypatch):
+    """An out-of-range number warns and asks again."""
+    answers = iter(['9', '1'])
+    monkeypatch.setattr('builtins.input', lambda prompt='': next(answers))
+    warnings = []
+    monkeypatch.setattr(table_mod.logger, 'warning',
+                        lambda message, *a, **k: warnings.append(message))
 
-    def fake_run(cmd, *a, **k):
-        calls.append(cmd)
-        raise scanner_mod.subprocess.TimeoutExpired(cmd, timeout=k.get('timeout', 15))
+    bssid, network = table_mod.prompt({1: _network('One')})
 
-    scanner_mod.subprocess.run = fake_run
-    result, _ = _run_iw_scanner(calls)
-
-    assert result is False, 'all attempts timed out -> scan must fail cleanly'
-    assert len(calls) == 4, f'expected 4 timed-out attempts, got {len(calls)}'
-
-
-def test_iw_scanner_yields_reason_on_persistent_busy():
-    """Persistent 'Device or resource busy' after all retries: fail with the reason."""
-    calls = []
-
-    def fake_run(cmd, *a, **k):
-        calls.append(cmd)
-        return FakeResult('command failed: Device or resource busy (-16)')
-
-    scanner_mod.subprocess.run = fake_run
-    result, _ = _run_iw_scanner(calls)
-
-    assert result is False, 'a scan that never succeeds must return False'
-    assert len(calls) == 4, f'expected 4 scan attempts, got {len(calls)}'
-
-
-def test_iw_scanner_falls_back_when_iw_missing():
-    """If the iw binary is missing, the Android universal scan is used instead."""
-    def fake_run(cmd, *a, **k):
-        raise FileNotFoundError('iw not found')
-
-    scanner_mod.subprocess.run = fake_run
-    original_android_network = scanner_mod.AndroidNetwork
-    scanner_mod.AndroidNetwork = lambda: SimpleNamespace(universalWifiScan=lambda: SAMPLE)
-    try:
-        nets, _ = _run_iw_scanner([])
-    finally:
-        scanner_mod.AndroidNetwork = original_android_network
-
-    assert nets, 'should fall back to the universal scan when iw is missing'
-    assert nets[1]['ESSID'] == 'TestNet', nets[1]['ESSID']
-
-
-def test_iw_scanner_retries_transient_empty_scan():
-    """A successful scan with zero networks (radio still settling) is retried."""
-    calls = []
-
-    def fake_run(cmd, *a, **k):
-        calls.append(cmd)
-        if len(calls) < 3:
-            return FakeResult('')   # transient empty result
-        return FakeResult(SAMPLE)
-
-    scanner_mod.subprocess.run = fake_run
-    nets, _ = _run_iw_scanner(calls)
-
-    assert nets, 'should retry after a transient empty scan'
-    assert len(calls) == 3, f'expected 3 scan attempts, got {len(calls)}'
-    assert nets[1]['ESSID'] == 'TestNet', nets[1]['ESSID']
-
-
-def test_iw_scanner_yields_false_on_persistent_empty_scan():
-    """An always-empty scan reports no WPS networks after bounded retries."""
-    calls = []
-
-    def fake_run(cmd, *a, **k):
-        calls.append(cmd)
-        return FakeResult('')
-
-    scanner_mod.subprocess.run = fake_run
-    result, _ = _run_iw_scanner(calls)
-
-    assert result is False, 'a persistently empty scan must fail'
-    assert len(calls) == 1 + 3, f'expected 1 scan + 3 empty retries, got {len(calls)}'
-
-
-if __name__ == '__main__':
-    test_prompt_network_selects_target()
-    test_iw_scanner_parses_wps_network()
-    test_iw_scanner_parses_wifi_standard()
-    test_scanner_clears_screen_before_each_scan()
-    test_iw_scanner_retries_transient_busy_error()
-    test_iw_scanner_times_out_instead_of_hanging()
-    test_iw_scanner_yields_reason_on_persistent_busy()
-    test_iw_scanner_falls_back_when_iw_missing()
-    test_iw_scanner_retries_transient_empty_scan()
-    test_iw_scanner_yields_false_on_persistent_empty_scan()
-    print('Scanner tests passed ✅')
+    assert network['ESSID'] == 'One'
+    assert warnings == ['Invalid number']

@@ -1,431 +1,130 @@
 #  NShot - WPS penetration testing utility
 #  License: GPL-3.0-or-later, see LICENSE.
 #  Origin and attribution: see CREDITS.md.
+"""Radio scanning: run `iw`, retry transient failures, return networks.
 
-import re
-import csv
-import codecs
+No table, no prompts, no logo — those belong to the CLI layer. What is left
+here is the part that has to talk to a driver that may be busy, gone, or slow.
+"""
+
 import subprocess
-import time
 
 from src import logger
-from src.utils import REPORTS_DIR
+from src.radio import Radio
+from src.store import DEFAULT_STORE
+from src.wifi.iwparse import parse_scan_lines
 
-import src.utils
-from src.wifi.android import AndroidNetwork
-
-LOGO = '''  ███╗   ██╗███████╗██╗  ██╗ ██████╗ ████████╗
-  ████╗  ██║██╔════╝██║  ██║██╔═══██╗╚══██╔══╝
-  ██╔██╗ ██║███████╗███████║██║   ██║   ██║
-  ██║╚██╗██║╚════██║██╔══██║██║   ██║   ██║
-  ██║ ╚████║███████║██║  ██║╚██████╔╝   ██║
-  ╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝ ╚═════╝    ╚═╝'''
-
-# A successful `iw scan` right after the radio was brought up can come back
-# with zero results while the driver/framework is still settling (on Android
-# the framework may still hold the radio). Retry that case a few times before
-# declaring that there are no WPS networks.
+# A fresh radio can answer with zero networks while the driver is settling.
 MAX_EMPTY_SCAN_RETRIES = 3
+# A busy interface ("device or resource busy") clears up after a short wait.
+SCAN_ATTEMPTS = 4
+SCAN_TIMEOUT = 15
 
-class WiFiScanner:
-    """Handles parsing scan results and table."""
 
-    def __init__(self, interface: str, vuln_list: str = None, args=None):
-        self.INTERFACE = interface
-        self.VULN_LIST = vuln_list
-        # Lets main() pass already-parsed arguments instead of
-        # re-parsing the CLI on every module import.
-        self.ARGS = args if args is not None else src.args.parseArgs()
+class ScanFailed(RuntimeError):
+    """The adapter can not scan at all: missing binary, broken subsystem."""
 
-        reports_fname = REPORTS_DIR + 'stored.csv'
+
+class Scanner:
+    """Finds WPS-capable networks on one interface."""
+
+    def __init__(self, interface: str, options, *, store=None, radio=None,
+                 runner=None):
+        self.interface = interface
+        self.options = options
+        self.store = store if store is not None else DEFAULT_STORE
+        self.radio = radio if radio is not None else Radio(interface)
+        # Resolved at call time so a replaced subprocess.run (tests, wrappers)
+        # is honoured instead of a default bound at import.
+        self._runner = runner or subprocess.run
+        self._last_error = None
+
+    def scan(self) -> list[dict] | None:
+        """Networks seen by the radio, strongest first; None if scanning failed."""
+        self.radio.wait_until_up()
+
+        command = ['iw', 'dev', self.interface, 'scan']
 
         try:
-            # Look for already stored networks to highlight
-            with open(reports_fname, 'r', newline='', encoding='utf-8') as file:
-                csv_reader = csv.reader(file,
-                    delimiter=';', quoting=csv.QUOTE_ALL
-                )
-
-                # Skip header
-                next(csv_reader)
-                self.STORED = []
-
-                for row in csv_reader:
-                    self.STORED.append(
-                        (
-                            row[1],   # BSSID
-                            row[2]    # ESSID
-                        )
-                    )
-        except FileNotFoundError:
-            self.STORED = []
-
-    def promptNetwork(self) -> tuple[str, dict] | None:
-        """Prompts the user to select a network from the available WPS networks."""
-
-        networks = self._iwScanner()
-
-        if not networks:
-            logger.error('No WPS networks found.')
-            return
-
-        while True:
-            try:
-                network_no = input('Select target (press Enter to refresh): ')
-
-                if network_no.lower() in {'r', '0', ''}:
-                    result = self.promptNetwork()
-                    if result is None:
-                        continue
-                    return result
-
-                if int(network_no) in networks.keys():
-                    selected_network = networks[int(network_no)]
-                    return (selected_network['BSSID'], selected_network)
-
-                raise IndexError
-            except (IndexError, ValueError):
-                logger.warning('Invalid number')
-
-    def _iwScanner(self) -> dict[int, dict] | bool:
-        """Parsing iw scan results."""
-
-        # Before each scanner run we clear the screen so previous tables do
-        # not accumulate (both the initial run and the Enter refresh), and
-        # print the logo before the table.
-        src.utils.clearScreen()
-        print(LOGO)
-
-        def handleNetwork(_line, result, networks):
-            networks.append(
-                {
-                    'ESSID': '',
-                    'Security type': 'Unknown',
-                    'WPS': False,
-                    'WPS version': '1.0',
-                    'WPS locked': False,
-                    'Model': '',
-                    'Model number': '',
-                    'Device name': '',
-                    'WiFi Standard': ''
-                }
+            lines = self.radio.retry(
+                lambda: self._scan_lines(command),
+                attempts=SCAN_ATTEMPTS,
+                on_retry=self._note_retry,
             )
-            networks[-1]['BSSID'] = result.group(1).upper()
+        except ScanFailed as error:
+            logger.error(str(error))
+            return None
 
-        def handleEssid(_line, result, networks):
-            try:
-                d = result.group(1)
-                essid = networks[-1]['ESSID'] = codecs.decode(d,'unicode-escape').encode('latin1').decode('utf-8', errors='replace')
+        if lines is None:
+            logger.error(f'iw scan failed: {self._last_error}')
+            return None
 
-                # Check if empty or only contains null/whitespace bytes
-                networks[-1]['ESSID'] = essid if essid.strip('\x00 ') else '<hidden>'
-            except (AttributeError, IndexError):
-                networks[-1]['ESSID'] = '<hidden>'
-
-        def handleLevel(_line, result, networks):
-            networks[-1]['Level'] = int(float(result.group(1)))
-
-        def handleSecurityType(_line, result, networks):
-            sec = networks[-1]['Security type']
-            if result.group(1) == 'capability':
-                if 'Privacy' in result.group(2):
-                    sec = 'WEP'
-                else:
-                    sec = 'Open'
-            elif sec == 'WEP':
-                if result.group(1) == 'RSN':
-                    sec = 'WPA2'
-                elif result.group(1) == 'WPA':
-                    sec = 'WPA'
-            elif sec == 'WPA':
-                if result.group(1) == 'RSN':
-                    sec = 'WPA/WPA2'
-            elif sec == 'WPA2':
-                if result.group(1) == 'PSK SAE':
-                    sec = 'WPA2/WPA3'
-                elif result.group(1) == 'WPA':
-                    sec = 'WPA/WPA2'
-            networks[-1]['Security type'] = sec
-
-        def handleWps(_line, result, networks):
-            networks[-1]['WPS'] = True
-
-        def handleWpsVersion(_line, result, networks):
-            wps_ver = networks[-1]['WPS version']
-
-            # Only WPS 2.0 APs broadcast this, this way we can distinguish between 1.0<->2.0
-            wps_ver_filtered = result.group(1).replace('* Version2:', '')
-
-            if wps_ver_filtered == '2.0':
-                wps_ver = '2.0'
-
-            networks[-1]['WPS version'] = wps_ver
-
-        def handleWpsLocked(_line, result, networks):
-            flag = int(result.group(1), 16)
-            if flag:
-                networks[-1]['WPS locked'] = True
-
-        def handleModel(_line, result, networks):
-            d = result.group(1)
-            networks[-1]['Model'] = codecs.decode(d, 'unicode-escape').encode('latin1').decode('utf-8', errors='replace')
-
-        def handleModelNumber(_line: str, result: str, networks: list):
-            d = result.group(1)
-            networks[-1]['Model number'] = codecs.decode(d, 'unicode-escape').encode('latin1').decode('utf-8', errors='replace')
-
-        def handleDeviceName(_line, result, networks):
-            d = result.group(1)
-            networks[-1]['Device name'] = codecs.decode(d, 'unicode-escape').encode('latin1').decode('utf-8', errors='replace')
-
-        def handleWifiStandard(_line, result, networks):
-            line = _line.upper()
-            if 'HE' in line or '802.11AX' in line:
-                networks[-1]['WiFi Standard'] = 'WiFi 6 (802.11ax)'
-            elif 'VHT' in line or '802.11AC' in line:
-                networks[-1]['WiFi Standard'] = 'WiFi 5 (802.11ac)'
-
-        networks = []
-        matchers = {
-            re.compile(r'BSS (\S+)( )?\(on \w+\)'): handleNetwork,
-            re.compile(r'SSID: (.*)'): handleEssid,
-            re.compile(r'signal: ([+-]?([0-9]*[.])?[0-9]+) dBm'): handleLevel,
-            re.compile(r'(capability): (.+)'): handleSecurityType,
-            re.compile(r'(RSN):\t [*] Version: (\d+)'): handleSecurityType,
-            re.compile(r'(WPA):\t [*] Version: (\d+)'): handleSecurityType,
-            re.compile(r'.*(HE |VHT |802\.11ax|802\.11ac).*'): handleWifiStandard,
-            re.compile(r'WPS:\t [*] Version: (([0-9]*[.])?[0-9]+)'): handleWps,
-            re.compile(r' [*] Version2: (.+)'): handleWpsVersion,
-            re.compile(r' [*] Authentication suites: (.+)'): handleSecurityType,
-            re.compile(r' [*] AP setup locked: (0x[0-9]+)'): handleWpsLocked,
-            re.compile(r' [*] Model: (.*)'): handleModel,
-            re.compile(r' [*] Model Number: (.*)'): handleModelNumber,
-            re.compile(r' [*] Device name: (.*)'): handleDeviceName
-        }
-
-        # Wait for the interface flag to be UP. This is a fast-path guard, but
-        # a bare "UP" flag is not enough: the driver may still be bringing the
-        # radio up asynchronously and iw will fail with "Network is down (-100)".
-        # Rather than blind-sleeping, we retry the scan a few times below, and
-        # before each retry we re-raise the interface in case it dropped again.
-        src.utils.waitForInterfaceUp(self.INTERFACE)
-
-        command = ['iw', 'dev', f'{self.INTERFACE}', 'scan']
-
-        # Retry up to MAX_SCAN_ATTEMPTS times so a transient "radio not ready
-        # yet" error does not abort the scan right after Wi-Fi is re-enabled.
-        # Two failure modes are handled here:
-        #  - "Device or resource busy (-16)": the framework/driver still holds
-        #    the radio (async Android teardown, wpa_supplicant, another scan in
-        #    progress). An instant retry just hits the same EBUSY, so between
-        #    attempts we sleep with a growing backoff, keep the interface up,
-        #    and on Android give the framework time to report the radio as off.
-        #  - a wedged driver/framework can block `iw scan` forever; the timeout
-        #    guarantees the tool can never hang on the logo with no output.
-        max_scan_attempts = 4
-        scan_timeout = 15
-        scan_attempts = 0
-        iw_scan_process = None
-        iw_missing = False
-        scan_succeeded = False
-        last_error = None
-        while scan_attempts < max_scan_attempts:
-            scan_attempts += 1
-            try:
-                iw_scan_process = subprocess.run(command,
-                    encoding='utf-8', errors='replace', stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT, timeout=scan_timeout
-                )
-            except subprocess.TimeoutExpired:
-                iw_scan_process = None
-                last_error = f'timed out after {scan_timeout}s'
-            except FileNotFoundError:
-                # `iw` is not installed - the Android fallback below is the
-                # only remaining option.
-                iw_missing = True
-                break
-            except (subprocess.CalledProcessError, OSError) as error:
-                logger.error(f'Failed to perform an iw scan: \n {error}')
-                return
-
-            if iw_scan_process is not None:
-                stdout = iw_scan_process.stdout or ''
-                returncode = getattr(iw_scan_process, 'returncode', 0)
-                if 'command failed' not in stdout and returncode == 0:
-                    scan_succeeded = True
-                    break
-                last_error = (stdout.splitlines() or [f'exit code {returncode}'])[0]
-
-            if scan_attempts >= max_scan_attempts:
-                break
-
-            # The radio is released asynchronously: wait a little (growing
-            # backoff), then make sure the interface is still up and, on
-            # Android, that the framework has actually let go of the radio.
-            time.sleep(min(0.5 * scan_attempts, 2.0))
-            src.utils.ensureInterfaceUp(self.INTERFACE, timeout=5.0)
-            if src.utils.isAndroid():
-                AndroidNetwork().waitForWifiOff(timeout=4.0)
-
-        if iw_missing:
-            # Android fallback: iw is missing - try cmd wifi / dumpsys
-            fallback = AndroidNetwork().universalWifiScan()
-            if not fallback:
-                return False
-            lines = fallback.splitlines()
-        elif not scan_succeeded:
-            # Every attempt failed or timed out: tell the user why instead of
-            # silently reporting "no WPS networks".
-            logger.error(f'iw scan failed: {last_error}')
-            return False
-        else:
-            lines = iw_scan_process.stdout.splitlines()
-
-        def parse_lines(raw_lines):
-            """Parse raw iw/framework scan output into WPS-capable networks."""
-            parsed = []
-            for line in raw_lines:
-                if line.startswith('command failed:'):
-                    logger.error(f'Error: {line}')
-                    break
-
-                line = line.strip('\t')
-
-                for regexp, handler in matchers.items():
-                    res = re.match(regexp, line)
-                    if res:
-                        handler(line, res, parsed)
-
-            # Filtering non-WPS networks
-            return list(filter(lambda x: bool(x['WPS']), parsed))
-
-        if self.ARGS.verbose:
+        if self.options.verbose:
             print('\n'.join(lines))
 
-        networks = parse_lines(lines)
-
-        # A successful scan that returns zero networks right after the radio
-        # was brought up is often transient: the driver/framework is still
-        # settling (and on Android the framework may still hold the radio), so
-        # the first scan can legitimately come back empty. Retry a few times
-        # with a short backoff before declaring "No WPS networks found".
-        if scan_succeeded and not networks:
-            for retry in range(1, MAX_EMPTY_SCAN_RETRIES + 1):
-                time.sleep(0.5 * retry)
-                src.utils.ensureInterfaceUp(self.INTERFACE, timeout=5.0)
-                if src.utils.isAndroid():
-                    AndroidNetwork().waitForWifiOff(timeout=4.0)
-
-                try:
-                    proc = subprocess.run(command,
-                        encoding='utf-8', errors='replace', stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT, timeout=scan_timeout)
-                except subprocess.TimeoutExpired:
-                    continue
-                except FileNotFoundError:
-                    break
-                except (subprocess.CalledProcessError, OSError):
-                    return
-
-                stdout = proc.stdout or ''
-                if 'command failed' in stdout or getattr(proc, 'returncode', 0) != 0:
-                    continue
-
-                networks = parse_lines(stdout.splitlines())
-                if networks:
-                    break
+        networks = self._parse(lines)
 
         if not networks:
-            return False
+            networks = self.radio.retry(
+                lambda: self._rescan(command),
+                attempts=MAX_EMPTY_SCAN_RETRIES,
+            ) or []
 
-        # Sorting by signal level
-        networks.sort(key=lambda x: x['Level'], reverse=True)
+        return networks
 
-        # Putting a list of networks in a dictionary, where each key is a network number in list of networks
-        network_list = {(i + 1): network for i, network in enumerate(networks)}
-        network_list_items = list(network_list.items())
+    # -- internals ---------------------------------------------------------
 
-        def truncateStr(s: str | None, length: int, postfix='…') -> str:
-            """Truncate string with the specified length."""
-
-            if len(s) > length:
-                k = length - len(postfix)
-                s = s[:k] + postfix
-            return s
-
-        def colored(text: str, color: str) -> str:
-            """Returns colored text"""
-
-            if color:
-                if color == 'green':
-                    text = f'\033[1m\033[92m{text}\033[00m'
-                if color == 'dark_green':
-                    text = f'\033[32m{text}\033[00m'
-                elif color == 'red':
-                    text = f'\033[1m\033[91m{text}\033[00m'
-                elif color == 'yellow':
-                    text = f'\033[1m\033[93m{text}\033[00m'
-                else:
-                    return text
-            else:
-                return text
-            return text
-
-        print('Network marks: {1} {0} {2} {0} {3} {0} {4}'.format(
-            '|',
-            colored('Vulnerable model', color='green'),
-            colored('Vulnerable WPS ver.', color='dark_green'),
-            colored('WPS locked', color='red'),
-            colored('Already stored', color='yellow')
-        ))
-
-        def entryMaxLength(item: str, max_length=27) -> int:
-            """Calculates max length of network_list_items entry"""
-
-            lengths = [len(entry[1].get(item, '')) for entry in network_list_items]
-            return min(max(lengths), max_length) + 1
-
-        # Used to calculate the max width of a collum in the network list table
-        columm_lengths = {
-            '#': 4,
-            'sec': entryMaxLength('Security type'),
-            'bssid': 18,
-            'essid': entryMaxLength('ESSID'),
-            'name': entryMaxLength('Device name'),
-            'model': entryMaxLength('Model'),
-            'wifi': entryMaxLength('WiFi Standard')
-        }
-
-        row = '{:<{#}} {:<{bssid}} {:<{essid}} {:<{sec}} {:<{#}} {:<{#}} {:<{wifi}} {:<{name}} {:<{model}}'
-
-        print(row.format(
-            '#', 'BSSID', 'ESSID', 'Sec.', 'PWR', 'Ver.', 'WiFi', 'WSC name', 'WSC model',
-            **columm_lengths
-        ))
-
-        if self.ARGS.reverse_scan:
-            network_list_items = network_list_items[::-1]
-        for n, network in network_list_items:
-            # (FOR COMPATIBILITY) pylint: disable=inconsistent-quotes
-            model = f'{network["Model"]} {network["Model number"]}'
-            essid = truncateStr(network['ESSID'], 25)
-            device_name = truncateStr(network['Device name'], 27)
-            number = f'{n})'
-            line = row.format(
-                number, network['BSSID'], essid,
-                network['Security type'], network['Level'],
-                network['WPS version'], network['WiFi Standard'], device_name, model,
-                **columm_lengths
+    def _scan_lines(self, command) -> list[str] | None:
+        """One `iw scan`. None means "retry"; ScanFailed means "give up"."""
+        try:
+            process = self._runner(
+                command,
+                encoding='utf-8', errors='replace',
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                timeout=SCAN_TIMEOUT,
             )
-            if (network['BSSID'], network['ESSID']) in self.STORED:
-                print(colored(line, color='yellow'))
-            elif network['WPS version'] == '1.0':
-                print(colored(line, color='dark_green'))
-            elif network['WPS locked']:
-                print(colored(line, color='red'))
-            elif self.VULN_LIST and (model in self.VULN_LIST) or (device_name in self.VULN_LIST):
-                print(colored(line, color='green'))
-            else:
-                print(line)
+        except subprocess.TimeoutExpired:
+            self._last_error = f'timed out after {SCAN_TIMEOUT}s'
+            return None
+        except FileNotFoundError:
+            return self._framework_fallback()
+        except (subprocess.CalledProcessError, OSError) as error:
+            raise ScanFailed(f'Failed to perform an iw scan: \n {error}') from error
 
-        return network_list
+        stdout = process.stdout or ''
+        if 'command failed' in stdout or getattr(process, 'returncode', 0) != 0:
+            self._last_error = stdout.strip() or 'iw reported a failure'
+            return None
+
+        self._last_error = None
+        return stdout.splitlines()
+
+    def _framework_fallback(self) -> list[str]:
+        """`iw` is not installed: ask the Android framework for a scan."""
+        output = self.radio.android.universalWifiScan()
+        if not output:
+            raise ScanFailed('iw is not installed and the framework scan returned nothing')
+        return output.splitlines()
+
+    def _rescan(self, command) -> list[dict] | None:
+        """Retry an empty scan; None means "try again"."""
+        try:
+            lines = self._scan_lines(command)
+        except ScanFailed:
+            return None
+        if not lines:
+            return None
+        networks = self._parse(lines)
+        return networks or None
+
+    def _parse(self, lines) -> list[dict]:
+        """Parse, treating a truncated scan as an empty retry point."""
+        try:
+            return parse_scan_lines(lines)
+        except ValueError as error:
+            logger.error(f'Error: {error}')
+            return []
+
+    def _note_retry(self, attempt: int) -> None:
+        if self._last_error:
+            logger.warning(f'Scan attempt {attempt} failed: {self._last_error}')

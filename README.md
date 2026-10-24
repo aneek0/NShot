@@ -132,7 +132,8 @@ sudo python3 nshot.py -i wlan0 --pbc                             # PBC
 
 ## Results
 
-On a successful crack with the `-w/--write` flag, three files are written to `reports/`:
+On a successful crack with the `-w/--write` flag, three files are written to
+`~/.NShot/reports/` (override with `NSHOT_HOME`):
 
 - `stored.txt` — human-readable report
 - `stored.csv` — table (used to highlight already known networks)
@@ -143,6 +144,7 @@ On a successful crack with the `-w/--write` flag, three files are written to `re
 
 Online brute-force sessions are saved in `~/.NShot/sessions/`, found PINs in
 `~/.NShot/pixiewps/`.
+
 
 ---
 
@@ -156,6 +158,22 @@ it through the control socket. This allows:
   attack through `pixiewps`;
 - brute-forcing the PIN online while tracking WPS-lock and WPS-FAIL.
 
+The code is layered so each concern has one home:
+
+| Module | Owns |
+|---|---|
+| `src/options.py` | parsed CLI options (frozen dataclass) |
+| `src/store.py` | everything persisted: sessions, PINs, reports |
+| `src/radio.py` | interface bring-up, recovery after a link drop |
+| `src/wifi/iwparse.py` | scan output -> network records |
+| `src/wifi/scanner.py` | running `iw`, retrying transient failures |
+| `src/wifi/table.py` | the network table and target prompt |
+| `src/wps/session.py` | the wpa_supplicant process and control socket |
+| `src/wps/protocol.py` | supplicant lines -> typed events |
+| `src/wps/attempt.py` | one WPS registration and its outcome |
+| `src/wps/bruteforce.py` | the online PIN walk over `attempt` |
+| `nshot.py` | CLI wiring only: flags -> store/radio/attempt |
+
 ---
 
 ## Tests
@@ -163,16 +181,17 @@ it through the control socket. This allows:
 All tests need no root and no Wi-Fi adapter (`wpa_supplicant`/`pixiewps` runs are mocked).
 
 ```bash
-python3 tests/run_all.py                     # the whole suite at once
+python3 -m pytest -q                        # the whole suite at once
 python3 tests/test_generator.py             # PIN generator, checksum, MAC
-python3 tests/test_scanner.py              # iw scan output parser
-python3 tests/test_engine.py               # attack engine: pixiewps, wpa_supplicant, brute-force
-python3 tests/test_utils.py                # utils: /proc, ip link, vulnerable list
-python3 tests/test_android.py             # android: cmd wifi / settings commands
-python3 tests/test_fullflow.py          # end-to-end: scan -> target pick -> WPS -> report
-python3 tests/test_integration.py          # full attack pipeline (PIN, retry, Pixie Dust, report)
-python3 tests/test_cli.py                 # CLI orchestration: kill/restore, iface up/down, loop
+python3 tests/test_scanner.py               # iw parsing, scan retries, table
+python3 tests/test_engine.py                # pixiewps adapter, attempt lifecycle
+python3 tests/test_integration.py           # attempt policy: PIN, lock, Pixie Dust, radio
+python3 tests/test_utils.py                 # utils: /proc, ip link, vulnerable list
+python3 tests/test_android.py               # android: cmd wifi / settings commands
+python3 tests/test_fullflow.py              # end-to-end: scan -> target pick -> WPS -> report
+python3 tests/test_cli.py                   # CLI orchestration: kill/restore, iface up/down, loop
 ```
+
 
 ---
 

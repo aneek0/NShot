@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Shared pytest fixture: keep the suite order-independent.
+"""Autouse fixture: isolate tests that replace shared module attributes.
 
-Several tests mock hardware by directly assigning to shared modules
-(src.utils, subprocess, os.path, socket, time, builtins, nshot) and never
-restore them. That leaks state across test files, so the suite failed when
-run as a whole (e.g. test_cli replaced handleConnection/ifaceCtl and broke
-test_fullflow/test_utils; test_fullflow/test_integration replaced
-isInterfaceUp and broke test_utils).
-
-This autouse fixture snapshots the affected attributes before each test and
-restores them afterwards, so every test starts from a clean state no matter
-in which order the files are run.
+Most tests inject fakes through constructor seams and need nothing here. A
+few hardware tests still assign to module attributes directly (subprocess.run,
+time.sleep, src.utils helpers, src.store.DEFAULT_STORE, sys.argv); those
+assignments leak into later test files, so they are snapshotted and restored.
 """
 
 import builtins
@@ -23,17 +17,16 @@ import time
 
 import pytest
 
-import src.utils
 import nshot
+import src.utils
 
 _MISSING = object()
 
-# module -> attributes that tests replace without restoring
 _SNAPSHOT = {
     src.utils: [
         'isInterfaceUp', '_ifaceFlagsUp', 'ifaceCtl', 'isAndroid',
         'killInterfering', 'restoreProcesses', 'ensureInterfaceUp',
-        'checkRunningProcesses', 'SESSIONS_DIR', 'REPORTS_DIR', 'clearScreen',
+        'checkRunningProcesses', 'clearScreen', 'DEFAULT_STORE',
     ],
     subprocess: ['run', 'Popen'],
     time: ['sleep'],
@@ -43,7 +36,8 @@ _SNAPSHOT = {
     socket: ['socket'],
     nshot: [
         'checkRoot', 'checkCoreRequirements', 'interfaceExists',
-        'isWirelessInterface', 'handleConnection', 'setupAndroidWifi',
+        'isWirelessInterface', 'handleConnection', 'setupAndroidWifi', 'which',
+        'runCheck',
     ],
 }
 
@@ -51,14 +45,16 @@ _SNAPSHOT = {
 @pytest.fixture(autouse=True)
 def _restore_module_state():
     saved = {
-        mod: {name: getattr(mod, name, _MISSING) for name in attrs}
-        for mod, attrs in _SNAPSHOT.items()
+        module: {name: getattr(module, name, _MISSING) for name in names}
+        for module, names in _SNAPSHOT.items()
     }
+
     yield
-    for mod, attrs in saved.items():
-        for name, value in attrs.items():
+
+    for module, attributes in saved.items():
+        for name, value in attributes.items():
             if value is _MISSING:
-                if hasattr(mod, name):
-                    delattr(mod, name)
+                if hasattr(module, name):
+                    delattr(module, name)
             else:
-                setattr(mod, name, value)
+                setattr(module, name, value)

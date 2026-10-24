@@ -5,17 +5,12 @@
 import sys
 import os
 import json
-import pathlib
 import subprocess
 import time
 
 from shutil import which
 from src import logger
-
-USER_HOME = str(pathlib.Path.home())
-SESSIONS_DIR = f'{USER_HOME}/.NShot/sessions/'
-PIXIEWPS_DIR = f'{USER_HOME}/.NShot/pixiewps/'
-REPORTS_DIR  = f'{os.getcwd()}/reports/'
+from src.store import DEFAULT_STORE
 
 def _getInterferingProcesses():
     """Get a list of processes actively using the generic netlink subsystem."""
@@ -58,7 +53,8 @@ def _saveKilledProcesses(processes: list[tuple[int, str, str]]):
         return
 
     try:
-        killed_file = os.path.join(SESSIONS_DIR, 'killed_processes.json')
+        killed_file = DEFAULT_STORE.killed_processes_path()
+        killed_file.parent.mkdir(parents=True, exist_ok=True)
 
         with open(killed_file, 'w', encoding='utf-8') as f:
             json.dump(processes, f, indent=2)
@@ -109,7 +105,7 @@ def killInterfering():
 def restoreProcesses():
     """Restore processes that were previously killed."""
 
-    killed_file = os.path.join(SESSIONS_DIR, 'killed_processes.json')
+    killed_file = DEFAULT_STORE.killed_processes_path()
 
     if not os.path.exists(killed_file):
         return
@@ -152,6 +148,7 @@ def ifaceCtl(interface: str, action: str):
         )
     except (subprocess.CalledProcessError, FileNotFoundError) as error:
         logger.error(f'Can not control interface with ip link: \n {error}')
+        return -1
 
     command_output_stripped = command_output.stdout.strip()
 

@@ -5,6 +5,8 @@
 import argparse
 import os
 
+import src.options
+
 def parseArgs():
     """Parse arguments passed to the main python script."""
 
@@ -174,4 +176,5 @@ Based on OneShot (kimocoder/rofl0r) and OneShot-Extended (chkndrp).
     if args.restore and not args.kill:
         parser.error('the -r/--restore argument can only be used with -k/--kill')
 
-    return args
+
+    return src.options.Options.from_namespace(args)

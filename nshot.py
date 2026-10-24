@@ -25,10 +25,13 @@ from src import logger
 
 import src.wifi.android
 import src.wifi.scanner
-import src.wps.connection
+import src.wifi.table
+import src.wps.attempt
 import src.wps.bruteforce
+import src.wps.generator
 import src.utils
 import src.args
+import src.store
 
 VERSION = '1.0'
 
@@ -122,13 +125,6 @@ def runCheck(args) -> int:
     return 0 if ok else 1
 
 
-def setupDirectories():
-    """Create the working directories for NShot data."""
-    for directory in [src.utils.SESSIONS_DIR, src.utils.PIXIEWPS_DIR]:
-        if not os.path.exists(directory):
-            os.makedirs(directory)
-
-
 def setupAndroidWifi(android_network: src.wifi.android.AndroidNetwork, enable: bool = False):
     """Set up Wi-Fi on Android depending on the mode."""
     if enable:
@@ -147,61 +143,117 @@ def setupMediatekWifi(wmt_wifi_device: Path):
     wmt_wifi_device.write_text('1', encoding='utf-8')
 
 
-def scanForNetworks(interface: str, vuln_list: list, args) -> tuple | None:
-    """Scan the air and let the user pick a network."""
-    scanner = src.wifi.scanner.WiFiScanner(interface, vuln_list, args)
-    return scanner.promptNetwork()
+def loadVulnList(path: str | None) -> list:
+    """Read the vulnerable-AP list used to highlight known targets."""
+    try:
+        with open(path, 'r', encoding='utf-8') as file:
+            return file.read().splitlines()
+    except (FileNotFoundError, TypeError):
+        return []
 
 
-def handleConnection(args):
+def scanForNetworks(interface: str, vuln_list: list, options,
+                    store, radio) -> tuple | None:
+    """Scan the air, show the table, and let the user pick a network."""
+    scanner = src.wifi.scanner.Scanner(interface, options, store=store, radio=radio)
+
+    while True:
+        networks = scanner.scan()
+        if not networks:
+            logger.error('No WPS networks found.')
+            return None
+
+        src.utils.clearScreen()
+        table = src.wifi.table.render(
+            networks,
+            stored=store.known_networks(),
+            vuln_list=vuln_list,
+            reverse=options.reverse_scan,
+        )
+
+        selection = src.wifi.table.prompt(table)
+        if selection:
+            return selection
+
+
+def resolvePin(options, bssid: str, store, generator) -> str | None:
+    """Pick the PIN to try: null PIN, explicit PIN, saved PIN, likely PIN."""
+    if options.null_pin:
+        return '00000000'
+    if options.pin:
+        return options.pin
+    if options.pbc:
+        return None
+
+    if options.pixie_dust:
+        saved = store.load_pin(bssid)
+        if saved:
+            try:
+                if input(f'[?] Use previously calculated PIN {saved}? [n/Y] ').lower() != 'n':
+                    return saved
+            except EOFError:
+                return saved
+        return generator.getLikely(bssid) or '12345670'
+
+    return generator.promptPin(bssid) or '00000000'
+
+
+def handleConnection(options, store, radio):
     """Core connection/attack logic."""
     network_info = {}
     success = False
 
     # Pixie Dust requires pixiewps
-    if args.pixie_dust and not which(PIXIEWPS_BINARY):
+    if options.pixie_dust and not which(PIXIEWPS_BINARY):
         src.utils.die('Pixie Dust requires pixiewps (apt install pixiewps)')
 
-    if args.bruteforce:
-        connection = src.wps.bruteforce.Initialize(args.interface, args)
-    else:
-        connection = src.wps.connection.Initialize(args.interface, args)
+    attempt = src.wps.attempt.Attempt(options.interface, options,
+                                      store=store, radio=radio)
 
-    if args.pbc:
-        connection.singleConnection(pbc_mode=True)
-    else:
-        if not args.bssid:
-            try:
-                with open(args.vuln_list, 'r', encoding='utf-8') as file:
-                    vuln_list = file.read().splitlines()
-            except FileNotFoundError:
-                vuln_list = []
+    if options.bruteforce:
+        brute = src.wps.bruteforce.Bruteforce(options, attempt, store=store)
+        bssid = options.bssid
+        if not bssid:
+            vuln_list = loadVulnList(options.vuln_list)
+            if not options.loop:
+                logger.info('No BSSID (--bssid) given - scanning for available networks')
+            result = scanForNetworks(options.interface, vuln_list, options, store, radio)
+            if result is None:
+                return
+            bssid = result[0]
+        brute.run(bssid, options.pin)
+        return
 
-            if not args.loop:
+    with attempt:
+        if options.pbc:
+            attempt.attempt_pbc(options.bssid)
+            return
+
+        bssid = options.bssid
+        if not bssid:
+            vuln_list = loadVulnList(options.vuln_list)
+            if not options.loop:
                 logger.info('No BSSID (--bssid) given - scanning for available networks')
 
-            result = scanForNetworks(args.interface, vuln_list, args)
+            result = scanForNetworks(options.interface, vuln_list, options, store, radio)
             if result is None:
                 return
 
-            args.bssid, network_info = result
+            bssid, network_info = result
 
-        if args.bssid:
-            if args.bruteforce:
-                connection.smartBruteforce(args.bssid, args.pin)
-            else:
-                success = connection.singleConnection(args.bssid, args.pin)
+        pin = resolvePin(options, bssid, store, src.wps.generator.WPSpin())
+        success = attempt.attempt(bssid, pin).ok
 
-            # On a successful Pixie Dust attack, add the device to the vulnerable list
-            if success and args.pixie_dust and network_info:
-                src.utils.addVulnerableAP(network_info, args.vuln_list)
+        # On a successful Pixie Dust attack, add the device to the vulnerable list
+        if success and options.pixie_dust and network_info:
+            src.utils.addVulnerableAP(network_info, options.vuln_list)
 
 
 def main():
-    args = src.args.parseArgs()
+    options = src.args.parseArgs()
 
-    if args.check:
-        sys.exit(runCheck(args))
+    if options.check:
+        sys.exit(runCheck(options))
 
     if not checkRoot():
         src.utils.die('Run as root (sudo python3 nshot.py ...)')
@@ -211,71 +263,74 @@ def main():
         src.utils.die(f'Missing required utilities: {", ".join(missing)}. '
                       'Install them (see install.sh)')
 
-    if args.interface and not interfaceExists(args.interface):
-        src.utils.die(f'Interface \'{args.interface}\' not found. Check the name (iw dev)')
+    if options.interface and not interfaceExists(options.interface):
+        src.utils.die(f'Interface \'{options.interface}\' not found. Check the name (iw dev)')
 
-    if args.interface and not isWirelessInterface(args.interface):
-        logger.warning(f'{args.interface} does not look like Wi-Fi (no /sys/class/net/{args.interface}/wireless). '
+    if options.interface and not isWirelessInterface(options.interface):
+        logger.warning(f'{options.interface} does not look like Wi-Fi (no /sys/class/net/{options.interface}/wireless). '
                        'WPS attacks need a Wi-Fi adapter (usually wlan0)')
 
-    setupDirectories()
+    store = src.store.DEFAULT_STORE
+    store.ensure()
     logger.initializeLogging()
 
-    src.utils.checkRunningProcesses(args.interface)
+    src.utils.checkRunningProcesses(options.interface)
 
-    if args.kill:
+    if options.kill:
         src.utils.killInterfering()
 
+    radio = src.radio.Radio(options.interface)
+
     while True:
+        # Assigned in the try, but the finally block lives outside it: an
+        # exception before this line must not turn cleanup into UnboundLocalError.
+        android_network = None
         try:
             android_network = src.wifi.android.AndroidNetwork()
 
-            if args.clear:
+            if options.clear:
                 src.utils.clearScreen()
 
-            if src.utils.isAndroid() and not args.dont_touch_settings and not args.mtk_wifi:
+            if src.utils.isAndroid() and not options.dont_touch_settings and not options.mtk_wifi:
                 setupAndroidWifi(android_network)
 
-            if args.mtk_wifi:
-                wmt_wifi_device = Path('/dev/wmtWifi')
-                setupMediatekWifi(wmt_wifi_device)
+            if options.mtk_wifi:
+                setupMediatekWifi(Path('/dev/wmtWifi'))
 
             # Bring the interface up and keep it up: a single `ip link set up`
             # is not enough on Android right after Wi-Fi was disabled - the
             # framework tears the interface down asynchronously and it can
             # drop again right after we raised it. ensureInterfaceUp re-raises
             # until the interface stays UP.
-            if not src.utils.ensureInterfaceUp(args.interface):
-                src.utils.die(f'Failed to bring interface \'{args.interface}\' up')
+            if not radio.ensure_up():
+                src.utils.die(f'Failed to bring interface \'{options.interface}\' up')
 
-            handleConnection(args)
+            handleConnection(options, store, radio)
 
-            if not args.loop:
+            if not options.loop:
                 break
 
-            args.bssid = None
-
         except KeyboardInterrupt:
-            if args.loop:
+            if options.loop:
                 if input('\n[?] Exit (otherwise continue scanning)? [N/y] ').lower() == 'y':
                     logger.info('Interrupt...')
                     break
-                args.bssid = None
             else:
                 logger.info('Interrupt...')
                 break
 
         finally:
-            if src.utils.isAndroid() and not args.dont_touch_settings and not args.mtk_wifi:
+            if (android_network is not None and src.utils.isAndroid()
+                    and not options.dont_touch_settings and not options.mtk_wifi):
                 setupAndroidWifi(android_network, enable=True)
 
-            if args.iface_down:
-                src.utils.ifaceCtl(args.interface, action='down')
+            if options.iface_down:
+                src.utils.ifaceCtl(options.interface, action='down')
 
-            if args.mtk_wifi:
+            if options.mtk_wifi:
                 Path('/dev/wmtWifi').write_text('0', encoding='utf-8')
 
-            if args.restore:
+            if options.restore:
                 src.utils.restoreProcesses()
 
 
